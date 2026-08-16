@@ -325,11 +325,17 @@ export class Engine {
     this.height = h;
     this.renderer.setPixelRatio(1);
     this.renderer.setSize(w, h, false);
-    this.canvas.style.width = `${cssW}px`;
-    this.canvas.style.height = `${cssH}px`;
 
     this.postfx?.setSize(w, h);
     for (const r of this.realms.values()) r.resize?.(w, h);
+
+    // Last, and deliberately so: EffectComposer.setSize forwards to
+    // renderer.setSize *without* passing updateStyle, which three defaults to
+    // true — so it stamps the drawing-buffer size onto the canvas CSS and the
+    // render ends up occupying renderScale² of the window. Re-assert the CSS
+    // size after everything else has had its say.
+    this.canvas.style.width = `${cssW}px`;
+    this.canvas.style.height = `${cssH}px`;
   }
 
   get aspect(): number {

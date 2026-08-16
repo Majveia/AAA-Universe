@@ -205,6 +205,13 @@ export class CosmosRealm implements Realm {
     this.applyOrbit();
   }
 
+  /** Harness hook: dump the cosmic web's GPU state. */
+  debugWeb(renderer: any): any {
+    const w = this.web as any;
+    if (w) w.probeStages = true;
+    return w?.debug?.(renderer) ?? { built: false };
+  }
+
   dispose(): void {
     this.web?.dispose();
     this.web = null;

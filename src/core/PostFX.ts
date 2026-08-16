@@ -353,7 +353,7 @@ export class PostFX {
       this.composer.addPass(new EffectPass(this.camera, smaa));
     }
 
-    this.composer.setSize(this.width, this.height);
+    this.composer.setSize(this.width, this.height, false);
   }
 
   setQuality(q: QualityProfile): void {
@@ -379,7 +379,9 @@ export class PostFX {
   setSize(w: number, h: number): void {
     this.width = w;
     this.height = h;
-    this.composer.setSize(w, h);
+    // updateStyle=false: otherwise this writes the drawing-buffer size into the
+    // canvas CSS and the render occupies renderScale² of the window.
+    this.composer.setSize(w, h, false);
   }
 
   /** Focus distance in world units — driven by what the player is looking at. */

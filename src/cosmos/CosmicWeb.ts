@@ -32,9 +32,11 @@ import {
   Mesh,
   NormalBlending,
   Object3D,
+  OrthographicCamera,
   PlaneGeometry,
   Points,
   RGBAFormat,
+  Scene,
   ShaderMaterial,
   Uniform,
   Vector2,
@@ -65,9 +67,22 @@ import {
 
 /** Comoving box side, in megaparsecs. Also the size in world units. */
 const BOX_MPC = 300;
-/** Cells per side of the density grid. Its atlas is GRID_N·COLS square. */
-const GRID_N = 64;
+/**
+ * Cells per side of the density grid, chosen from the particle lattice.
+ *
+ * This has to track the particle count or the whole thing quietly renders
+ * black: mass assignment only means anything with several particles per cell,
+ * and a fixed 64³ grid holding 24³ particles gives 0.05 of a particle per cell,
+ * so almost every cell is empty and the density field — and therefore every
+ * colour and every force derived from it — is zero.
+ */
 const GRID_COLS = 8;
+function gridSideFor(lattice: number): number {
+  // Must stay divisible by GRID_COLS so the Z slices tile into a square atlas.
+  if (lattice <= 24) return 16;
+  if (lattice <= 48) return 32;
+  return 64;
+}
 
 /** Lattice side per tier — the particle count is the cube of this. */
 function latticeFor(budget: number): number {
@@ -120,9 +135,10 @@ export class CosmicWeb implements ICosmicWeb {
   private webPoints: Points | null = null;
   private compositeMesh: Mesh | null = null;
   /** A scene of one, used only to draw the splat into the grid. */
-  private splatScene = new Object3D();
+  private splatScene = new Scene();
 
-  private gridInfo = new Vector4(GRID_N, GRID_COLS, GRID_N * GRID_COLS, GRID_N * (GRID_N / GRID_COLS));
+  private gridN = 64;
+  private gridInfo = new Vector4(64, GRID_COLS, 64 * GRID_COLS, 64 * (64 / GRID_COLS));
   private gridBox = new Vector4(-BOX_MPC / 2, -BOX_MPC / 2, -BOX_MPC / 2, BOX_MPC);
   private invViewProj = new Matrix4();
   private invModel = new Matrix4();
@@ -148,6 +164,13 @@ export class CosmicWeb implements ICosmicWeb {
 
     this.lattice = latticeFor(quality.cosmicWebParticles);
     this.particles = this.lattice ** 3;
+    this.gridN = gridSideFor(this.lattice);
+    this.gridInfo.set(
+      this.gridN,
+      GRID_COLS,
+      this.gridN * GRID_COLS,
+      this.gridN * (this.gridN / GRID_COLS)
+    );
     this.texW = 512;
     this.texH = Math.ceil(this.particles / this.texW);
 
@@ -176,8 +199,8 @@ export class CosmicWeb implements ICosmicWeb {
     this.simB = createTarget(this.texW, this.texH, { ...t, count: 3 });
     const gw = this.gridInfo.z;
     const gh = this.gridInfo.w;
-    this.gridA = createTarget(gw, gh, t);
-    this.gridB = createTarget(gw, gh, t);
+    this.gridA = createTarget(gw, gh, { half: true, linear: true });
+    this.gridB = createTarget(gw, gh, { half: true, linear: true });
 
     clearTarget(renderer, this.simA);
     clearTarget(renderer, this.simB);
@@ -199,7 +222,7 @@ export class CosmicWeb implements ICosmicWeb {
       },
     });
 
-    const meanCell = (GRID_N ** 3) / this.particles;
+    const meanCell = this.gridN ** 3 / this.particles;
     this.simMat = new ShaderMaterial({
       vertexShader: QUAD_VERT,
       fragmentShader: SIM_FRAG,
@@ -451,7 +474,13 @@ export class CosmicWeb implements ICosmicWeb {
     h.uTime.value = this.elapsed;
     h.uGain.value = 1.0;
     this.quad.run(renderer, this.hazeMat!, this.hazeTarget!);
-    this.compositeMat!.uniforms.uHaze.value = textureOf(this.hazeTarget!, 0);
+    if (this.showGrid) {
+      this.compositeMat!.uniforms.uHaze.value = density;
+      this.compositeMat!.uniforms.uGain.value = 2.0;
+    } else {
+      this.compositeMat!.uniforms.uHaze.value = textureOf(this.hazeTarget!, 0);
+      this.compositeMat!.uniforms.uGain.value = 1.0;
+    }
 
     /* ---- 5. the visible particles ---- */
     const p = this.pointsMat!.uniforms;
@@ -477,7 +506,7 @@ export class CosmicWeb implements ICosmicWeb {
     renderer.setRenderTarget(target);
     // The splat shader writes clip-space coordinates itself, so the camera it
     // is handed is irrelevant — but three still needs one.
-    renderer.render(this.splatScene as any, _splatCam);
+    renderer.render(this.splatScene, _splatCam);
     renderer.setRenderTarget(prev);
     renderer.autoClear = prevAuto;
   }
@@ -485,6 +514,9 @@ export class CosmicWeb implements ICosmicWeb {
   /* ═══════════════════════════════════════════════════════════════════════
      API
      ═══════════════════════════════════════════════════════════════════════ */
+
+  /** Diagnostic: paint the density grid over the frame instead of the haze. */
+  showGrid = false;
 
   setTimeRate(rate: number): void {
     this.timeRate = Math.max(0, rate);
@@ -602,13 +634,9 @@ const AXES = [new Vector3(1, 0, 0), new Vector3(0, 1, 0), new Vector3(0, 0, 1)];
 const _v2 = new Vector2();
 const _v3a = new Vector3();
 const _v3b = new Vector3();
-// The splat shader emits clip space directly; this camera is a formality.
-const _splatCam = new (class extends Object3D {
-  isCamera = true;
-  projectionMatrix = new Matrix4();
-  projectionMatrixInverse = new Matrix4();
-  matrixWorldInverse = new Matrix4();
-})() as any;
+// The splat shader writes clip space itself, so this camera only has to exist —
+// but it must be a real Camera, because three drives internal state from it.
+const _splatCam = new OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
 function smooth01(x: number, e0: number, e1: number): number {
   const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
