@@ -36,7 +36,8 @@ import { GLSL_COLOR, GLSL_NOISE } from '../core/Noise';
 import { TerrainField } from './TerrainField';
 import { QuadSphere } from './QuadSphere';
 import { makeTerrainMaterial, type TerrainUniforms } from './TerrainMaterial';
-import { makeClouds, type CloudDeck } from './Clouds';
+import { CLOUD_SAMPLE_GLSL, makeClouds, type CloudDeck } from './Clouds';
+import { AERIAL_GLSL, AERIAL_UNIFORMS, aerialUniformValues } from './Aerial';
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Atmosphere
@@ -237,22 +238,31 @@ void main(){
 }
 `;
 
-const OCEAN_FRAG = /* glsl */ `
+const oceanFrag = (fieldGlsl: string) => /* glsl */ `
 #include <common>
 #include <logdepthbuf_pars_fragment>
 ${GLSL_NOISE}
 ${GLSL_COLOR}
+${fieldGlsl}
+${CLOUD_SAMPLE_GLSL}
+${AERIAL_UNIFORMS}
+${AERIAL_GLSL}
 
+uniform sampler2D uCloudTex;
+uniform float uCloudMidR;
+uniform float uCloudShadow;
 uniform vec3  uCamLocal;
 uniform vec3  uSunDir;
 uniform vec3  uSunColor;
 uniform float uSunIntensity;
 uniform vec3  uShallow;
 uniform vec3  uDeep;
+uniform vec3  uSand;
 uniform vec3  uSkyTint;
 uniform float uTime;
 uniform float uEmissive;
 uniform float uWaveHeight;
+uniform float uFloorFmax;
 
 varying vec3 vWorld;
 varying vec3 vDir;
@@ -297,10 +307,24 @@ void main(){
   float spec = pow(max(dot(N, H), 0.0), 900.0) * 2.4
              + pow(max(dot(N, H), 0.0), 90.0) * 0.22;
 
-  vec3 body = mix(uDeep, uShallow, ndl * 0.6 + 0.25);
+  // How deep is it here? The sea floor comes from the same height field the
+  // terrain draws, evaluated at a coarse band limit — a continental shelf is a
+  // hundred-kilometre feature and needs none of the fine octaves.
+  //
+  // This is the single largest thing separating a water world from a blue ball.
+  // Water absorbs red within a few metres and blue over tens, so a shelf is
+  // turquoise, a trench is nearly black, and the boundary between them traces
+  // every coastline and every island chain from orbit.
+  float floorN = aeHeightN(up, uFloorFmax);
+  float depth = max(0.0, (AE_DATUM - floorN) * AE_MAXELEV);
+  float dAtten = 1.0 - exp(-depth / 46.0);
+  vec3 body = mix(uShallow, uDeep, dAtten);
+  // In the first few metres the bottom itself is visible through the water.
+  body = mix(uSand * 0.62, body, smoothstep(0.0, 13.0, depth));
+
   // Subsurface: light that made it through the crest and back out.
   float sss = pow(clamp(dot(V, -L) * 0.5 + 0.5, 0.0, 1.0), 3.0) * 0.6;
-  body += uShallow * sss * uSunIntensity * 0.22;
+  body += uShallow * sss * uSunIntensity * 0.22 * (1.0 - dAtten * 0.7);
 
   vec3 sky = uSkyTint * uSunIntensity * (0.5 + 0.5 * ndl) * 0.30;
   vec3 col = mix(body * uSunColor * uSunIntensity * (0.25 + 0.75 * ndl), sky, F);
@@ -308,6 +332,14 @@ void main(){
 
   // Non-water fluids (lava, mostly) light themselves.
   col += uShallow * uEmissive;
+
+  // A cloud shadow on open water is the most legible shadow on any world:
+  // there is nothing else out there for the eye to attribute the darkening to.
+  if (uCloudShadow > 0.001) {
+    col *= mix(1.0, 0.30, aeCloudShadow(uCloudTex, vWorld, uSunDir, uCloudMidR) * uCloudShadow);
+  }
+
+  col = aeAerial(col, vWorld, uCamLocal, uSunDir, uSunColor, uSunIntensity);
 
   gl_FragColor = vec4(col, 1.0);
 }
@@ -378,6 +410,13 @@ export class Planet implements IPlanet {
     tu.uCloudTex.value = c.texture;
     tu.uCloudMidR.value = c.midRadius;
     tu.uCloudShadow.value = 1;
+    for (const m of [this.oceanFar, this.oceanNear]) {
+      if (!m) continue;
+      const u = (m.material as ShaderMaterial).uniforms;
+      u.uCloudTex.value = c.texture;
+      u.uCloudMidR.value = c.midRadius;
+      u.uCloudShadow.value = 1;
+    }
   }
 
   /* ─────────────────────────── construction ─────────────────────────── */
@@ -436,12 +475,22 @@ export class Planet implements IPlanet {
       uSunIntensity: new Uniform(1),
       uShallow: new Uniform(new Color(...o.shallow)),
       uDeep: new Uniform(new Color(...o.deep)),
+      uSand: new Uniform(new Color(...this.spec.palette.sand)),
+      // Band-limit the sea-floor lookup: continental shelves are hundred-
+      // kilometre features, and the fine octaves would only alias.
+      uFloorFmax: new Uniform(Math.min(this.field.fmaxFull, 46)),
       uSkyTint: new Uniform(
         new Color(
           ...(this.spec.atmosphere.present ? this.spec.atmosphere.tint : ([0.05, 0.06, 0.09] as any))
         )
       ),
       uEmissive: new Uniform(emissive),
+      uCloudTex: new Uniform(null),
+      uCloudMidR: new Uniform(this.radius * 1.001),
+      uCloudShadow: new Uniform(0),
+      ...Object.fromEntries(
+        Object.entries(aerialUniformValues(this.spec)).map(([k, v]) => [k, new Uniform(v)])
+      ),
     });
 
     // Far: one sphere, no displacement — at that distance waves are invisible
@@ -451,7 +500,7 @@ export class Planet implements IPlanet {
       farGeo,
       new ShaderMaterial({
         vertexShader: OCEAN_VERT,
-        fragmentShader: OCEAN_FRAG,
+        fragmentShader: oceanFrag(this.field.glsl()),
         uniforms: mkUniforms(0),
         side: FrontSide,
         toneMapped: false,
@@ -466,7 +515,7 @@ export class Planet implements IPlanet {
       nearGeo,
       new ShaderMaterial({
         vertexShader: OCEAN_VERT,
-        fragmentShader: OCEAN_FRAG,
+        fragmentShader: oceanFrag(this.field.glsl()),
         uniforms: mkUniforms(1),
         side: DoubleSide,
         toneMapped: false,
@@ -681,7 +730,12 @@ export class Planet implements IPlanet {
       maxPatches: q.tier === 'ultra' ? 1400 : q.tier === 'high' ? 900 : 500,
     });
     this.clouds?.setQuality(q.tier, q.cloudSteps);
-    if (this.clouds) this.terrainUniforms.uCloudTex.value = this.clouds.texture;
+    if (this.clouds) {
+      this.terrainUniforms.uCloudTex.value = this.clouds.texture;
+      for (const m of [this.oceanFar, this.oceanNear]) {
+        if (m) (m.material as ShaderMaterial).uniforms.uCloudTex.value = this.clouds.texture;
+      }
+    }
     this.terrainMat.flatShading = false;
     this.terrainMat.needsUpdate = true;
   }
