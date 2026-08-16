@@ -709,7 +709,7 @@ float galaxyArmPhase(float r, float theta, float shift){
   return (theta - uPattern - galaxyArmAngle(r) + shift) * uArms;
 }
 
-/** 0–1 arm occupancy. `sharp` narrows the crest; arms fade at both ends. */
+/** 0-1 arm occupancy. "sharp" narrows the crest; arms fade at both ends. */
 float galaxyArmWeight(float r, float theta, float sharp, float shift){
   if (uArms < 0.5) return 0.0;
   float ph = galaxyArmPhase(r, theta, shift);

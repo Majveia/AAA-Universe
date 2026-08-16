@@ -267,6 +267,17 @@ export class TouchControls {
     }));
   }
 
+  /**
+   * Re-sync the "you already know this one" styling against the Learn store.
+   * Called when hints are reset from the settings panel, so buttons that had
+   * faded back to their taught state without needing a rebuild.
+   */
+  refreshLearned(): void {
+    for (const [id, n] of this.nodes) {
+      n.root.classList.toggle('ae-known', this.learn.learned(id));
+    }
+  }
+
   /* ─────────────────────────── feedback ─────────────────────────── */
 
   private press(id: string, down: boolean): void {

@@ -355,8 +355,8 @@ export function saturationCurve(amount: number, n = 2048): Float32Array {
 }
 
 /** Asymmetric soft clip — adds even harmonics, good for brass and engines. */
-export function brassCurve(amount: number, n = 2048): Float32Array {
-  const c = new Float32Array(n);
+export function brassCurve(amount: number, n = 2048): Float32Array<ArrayBuffer> {
+  const c = new Float32Array(new ArrayBuffer(n * 4));
   const a = Math.max(0.001, amount);
   for (let i = 0; i < n; i++) {
     const x = (i / (n - 1)) * 2 - 1;

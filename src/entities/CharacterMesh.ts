@@ -84,6 +84,8 @@ const _q = new Quaternion();
 const _q2 = new Quaternion();
 const _qTmp = new Quaternion();
 const _qPose = new Quaternion();
+/** Scratch for the knee bend computed by the two-bone IK. */
+const kneeQ = new Quaternion();
 const DOWN = new Vector3(0, -1, 0);
 const _xAxis = new Vector3(1, 0, 0);
 const _zAxis = new Vector3(0, 0, 1);
@@ -630,7 +632,6 @@ export class CharacterMesh {
         kneeQ.setFromAxisAngle(_xAxis, -(Math.PI - B));
 
         // Blend IK against the airborne pose by the ground weight.
-        this.thigh[i].quaternion.slerp(_q, 1).slerp(_qPose.copy(_q), 0); // (IK already in _q)
         this.thigh[i].quaternion.copy(_q);
         this.knee[i].quaternion.copy(kneeQ);
         if (wGround < 0.999) {
@@ -645,11 +646,6 @@ export class CharacterMesh {
         // Ankle keeps the sole parallel to the ground it is standing on.
         const thighAng = 2 * Math.asin(clamp(_q.x, -1, 1)) * Math.sign(_q.w || 1);
         this.ankle[i].rotation.set(clamp(-(thighAng - (Math.PI - B)) * 0.85, -0.7, 0.7) * wGround, 0, 0);
-      } else {
-        this.thigh[i].quaternion.copy(_q);
-        this.knee[i].quaternion.copy(kneeQ);
-        this.ankle[i].rotation.set(wSwim * 0.55 + wJet * 0.35, 0, 0);
-        this.footY[i].set(0);
       }
     }
 
