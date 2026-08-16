@@ -70,13 +70,16 @@ void main(){
   gl_Position = projectionMatrix * mv;
   float dist = max(-mv.z, 1.0);
   float truePx = (aRadius / dist) * uPixPerRad * 2.0;
-  float drawn = clamp(truePx * 3.0, 4.0, 90.0);
+  // A planet at one AU subtends a few hundredths of a pixel, so the floor is
+  // what you actually see. Keep it small and let the intensity carry the
+  // brightness — a big dim disc reads as a smudge, a small hot one as a world.
+  float drawn = clamp(truePx * 3.0, 5.0, 90.0);
   gl_PointSize = drawn;
   float au = dist / 1.495978707e11;
   vColor = aColor;
   // Reflected flux falls off with distance from the viewer as well as from
   // the star; aFlux already carries the star-side term.
-  vI = aFlux / max(1e-8, au * au) * 2600.0 / max(1.0, drawn * drawn);
+  vI = aFlux / max(1e-8, au * au) * 22000.0 / max(1.0, drawn * drawn);
   #include <logdepthbuf_vertex>
 }
 `;

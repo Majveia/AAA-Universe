@@ -75,7 +75,6 @@ export const HUD_CSS = `
   position:absolute;left:0;top:0;width:0;height:0;
   color:var(--ae-ink);
   opacity:0;
-  will-change:transform,opacity;
   transform:translate3d(-999px,-999px,0);
 }
 .ae-mk-g,.ae-mk-c{
@@ -397,7 +396,6 @@ export const HUD_CSS = `
   color:var(--ae-ink);
   border:1px solid rgba(228,235,246,.19);
   background:radial-gradient(circle at 50% 34%,rgba(20,28,42,.34),rgba(8,12,20,.20));
-  -webkit-backdrop-filter:blur(2px);backdrop-filter:blur(2px);
   opacity:0;transform:scale(.86);
   transition:opacity .32s var(--ae-ease),transform .22s var(--ae-ease),
              border-color .2s linear,box-shadow .28s var(--ae-ease);
@@ -420,7 +418,7 @@ export const HUD_CSS = `
   text-shadow:0 1px 8px rgba(0,0,0,.9);
 }
 .ae-btn.ae-known .ae-btn-cap{opacity:0;}
-.ae-btn.ae-mini{border-color:transparent;background:none;-webkit-backdrop-filter:none;backdrop-filter:none;}
+.ae-btn.ae-mini{border-color:transparent;background:none;}
 .ae-btn.ae-mini.ae-on{opacity:.44;}
 .ae-btn.ae-mini.ae-press{opacity:.95;box-shadow:none;transform:scale(.88);}
 
@@ -431,7 +429,6 @@ export const HUD_CSS = `
 .ae-panel-scrim{
   position:absolute;inset:0;background:rgba(3,5,9,.42);
   opacity:0;transition:opacity .42s var(--ae-ease);
-  -webkit-backdrop-filter:blur(1.5px);backdrop-filter:blur(1.5px);
 }
 .ae-panel.ae-on .ae-panel-scrim{opacity:1;pointer-events:auto;}
 .ae-sheet{
