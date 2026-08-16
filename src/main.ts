@@ -133,7 +133,9 @@ async function boot(): Promise<void> {
     galaxyView: (o: any) => galaxy.debugView(o),
     systemView: (o: any) => system.debugView(o),
     planetView: (o: any) => surface.debugView(o),
-    webDebug: (o: any) => cosmos.debugWeb(o),
+    webDebug: (o: any) => cosmos.debugWeb({ ...(o ?? {}), renderer: engine.renderer }),
+    setPost: (v: boolean) => (engine.postEnabled = v),
+    debugBox: (v: boolean) => cosmos.setDebugBox(v),
   };
 }
 

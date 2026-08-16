@@ -10,7 +10,7 @@
  *      inertia, and a lot of angular damping, makes it feel like mass.
  */
 
-import { Euler, MathUtils, Object3D, PerspectiveCamera, Quaternion, Vector3 } from 'three';
+import { Euler, MathUtils, Matrix4, PerspectiveCamera, Quaternion, Vector3 } from 'three';
 import type { Input } from '../core/Input';
 
 const _q = new Quaternion();
@@ -18,6 +18,7 @@ const _v = new Vector3();
 const _fwd = new Vector3();
 const _right = new Vector3();
 const _up = new Vector3();
+const _m = new Matrix4();
 
 export class FlyCamera {
   readonly camera: PerspectiveCamera;
@@ -58,10 +59,12 @@ export class FlyCamera {
   }
 
   lookAt(target: Vector3): void {
-    const m = new Object3D();
-    m.position.copy(this.position);
-    m.lookAt(target);
-    this.orientation.copy(m.quaternion);
+    // Matrix4.lookAt gives a camera-style basis: -Z points from eye to target.
+    // Object3D.lookAt does NOT — for anything that is not a camera or a light
+    // it builds the opposite orientation, so using it here aimed every realm's
+    // camera 180 degrees away from its subject and rendered a black screen.
+    _m.lookAt(this.position, target, this.camera.up);
+    this.orientation.setFromRotationMatrix(_m);
   }
 
   /** Current speed in units/s including the throttle multiplier. */

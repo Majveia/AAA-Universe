@@ -86,6 +86,10 @@ if (ready) {
   // Dismiss the enter gate, then let the render loop actually run — the first
   // frames are shader compilation, which in software takes a while.
   await page.mouse.click(640, 360);
+  // Pin the tier: adaptive quality drops to 'potato' under a software
+  // rasteriser, which is not the configuration worth looking at.
+  await page.evaluate((t) => window.__aeon.setTier(t), process.env.AEON_TIER ?? 'medium');
+  await sleep(1500);
   const HOLD = parseInt(process.argv[4] ?? '30', 10) * 1000;
   const step = 5000;
   for (let waited = 0; waited < HOLD; waited += step) {
@@ -95,12 +99,36 @@ if (ready) {
   }
   await page.screenshot({ path: 'captures/diag.png' });
   console.log('wrote captures/diag.png');
+  // Raw scene, no post chain: separates "nothing is being drawn" from
+  // "something in post is eating it".
+  await page.evaluate(() => window.__aeon.setPost?.(false));
+  await sleep(3000);
+  await page.screenshot({ path: 'captures/diag-nopost.png' });
+  console.log('wrote captures/diag-nopost.png');
+  await page.evaluate(() => window.__aeon.setPost?.(true));
+  await sleep(1500);
+  const camInfo = await page.evaluate(() => window.__aeon.debugBox?.(true));
+  console.log('camera:', JSON.stringify(camInfo));
+  await sleep(3000);
+  await page.screenshot({ path: 'captures/diag-box.png' });
+  console.log('wrote captures/diag-box.png');
+  await page.evaluate(() => window.__aeon.debugBox?.(false));
+  await page.evaluate(() => window.__aeon.webDebug?.({ flat: true }));
+  await sleep(3000);
+  await page.screenshot({ path: 'captures/diag-flat.png' });
+  console.log('wrote captures/diag-flat.png');
+  await page.evaluate(() => window.__aeon.webDebug?.({ flat: false }));
+  await sleep(1000);
   // Paint the density atlas straight to the screen: if the splat is working
   // this is unmistakable, and it needs no pixel readback.
-  await page.evaluate(() => window.__aeon.webDebug?.({ showGrid: true }));
-  await sleep(4000);
-  await page.screenshot({ path: 'captures/diag-grid.png' });
-  console.log('wrote captures/diag-grid.png');
+  for (const stage of ['splat', 'blur']) {
+    await page.evaluate((st) => window.__aeon.webDebug?.({ showGrid: st }), stage);
+    await sleep(4000);
+    const d = await page.evaluate(() => window.__aeon.webDebug?.({}));
+    console.log(`  ${stage} diag:`, JSON.stringify(d?.diag), 'rho:', JSON.stringify(d?.rho));
+    await page.screenshot({ path: `captures/diag-${stage}.png` });
+    console.log(`wrote captures/diag-${stage}.png`);
+  }
 }
 
 const seen = new Set();

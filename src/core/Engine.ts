@@ -58,6 +58,8 @@ export class Engine {
   time = 0;
   frame = 0;
   paused = false;
+  /** Diagnostic: bypass the post chain and render the scene straight. */
+  postEnabled = true;
   /** Global slow-motion / time-dilation factor applied to gameplay dt. */
   timeScale = 1;
 
@@ -273,8 +275,11 @@ export class Engine {
       this.current.update(dt, this.context());
       this.renderer.info.reset();
       const handled = this.current.render?.(this.context(), rawDt);
-      if (!handled && this.postfx) this.postfx.render(rawDt);
-      else if (!handled) this.renderer.render(this.current.scene, this.current.camera);
+      if (!handled && this.postfx && this.postEnabled) this.postfx.render(rawDt);
+      else if (!handled) {
+        this.renderer.setRenderTarget(null);
+        this.renderer.render(this.current.scene, this.current.camera);
+      }
     }
 
     this.input.endFrame();

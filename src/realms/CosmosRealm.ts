@@ -12,7 +12,10 @@
 
 import {
   AmbientLight,
+  BoxGeometry,
   Color,
+  Mesh,
+  MeshBasicMaterial,
   MathUtils,
   Scene,
   Vector3,
@@ -206,10 +209,42 @@ export class CosmosRealm implements Realm {
   }
 
   /** Harness hook: dump the cosmic web's GPU state. */
-  debugWeb(renderer: any): any {
+  /**
+   * Diagnostic: a plain box at the origin. The only thing currently visible in
+   * this realm is a full-screen quad whose vertex shader ignores the camera —
+   * so if this box does not appear either, the fault is the camera, not any
+   * individual system.
+   */
+  private debugBox: Mesh | null = null;
+  setDebugBox(on: boolean): any {
+    if (on && !this.debugBox) {
+      this.debugBox = new Mesh(
+        new BoxGeometry(120, 120, 120),
+        new MeshBasicMaterial({ color: 0xff5522, wireframe: true, toneMapped: false })
+      );
+      this.scene.add(this.debugBox);
+    } else if (!on && this.debugBox) {
+      this.scene.remove(this.debugBox);
+      this.debugBox = null;
+    }
+    const c = this.camera;
+    return {
+      camPos: c.position.toArray().map((v) => Number(v.toFixed(2))),
+      near: c.near,
+      far: c.far,
+      fov: c.fov,
+      aspect: Number(c.aspect.toFixed(3)),
+      projOk: Number.isFinite(c.projectionMatrix.elements[0]),
+      proj0: Number(c.projectionMatrix.elements[0].toFixed(4)),
+    };
+  }
+
+  debugWeb(opts: any = {}): any {
     const w = this.web as any;
-    if (w) w.probeStages = true;
-    return w?.debug?.(renderer) ?? { built: false };
+    if (!w) return { built: false };
+    if (opts.showGrid !== undefined) w.showGrid = opts.showGrid;
+    if (opts.flat !== undefined) w.setFlat?.(opts.flat);
+    return { showGrid: w.showGrid, diag: w.diag, rho: w.probeRho?.(opts.renderer) };
   }
 
   dispose(): void {

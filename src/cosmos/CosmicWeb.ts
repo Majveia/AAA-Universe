@@ -23,6 +23,7 @@
  */
 
 import {
+  AddEquation,
   AdditiveBlending,
   BufferAttribute,
   BufferGeometry,
@@ -35,8 +36,11 @@ import {
   OrthographicCamera,
   PlaneGeometry,
   Points,
+  PointsMaterial,
   RGBAFormat,
   Scene,
+  CustomBlending,
+  OneFactor,
   ShaderMaterial,
   Uniform,
   Vector2,
@@ -105,6 +109,8 @@ export class CosmicWeb implements ICosmicWeb {
   private timeRate = 1;
   private simTimeGyr = 0;
   private elapsed = 0;
+  /** Diagnostic counters, surfaced through debug(). */
+  diag: Record<string, number> = {};
 
   private renderer: WebGLRenderer | null = null;
   private quality: QualityProfile | null = null;
@@ -287,7 +293,18 @@ export class CosmicWeb implements ICosmicWeb {
       transparent: true,
       depthTest: false,
       depthWrite: false,
-      blending: AdditiveBlending,
+      // NOT AdditiveBlending. Three's additive preset is (SRC_ALPHA, ONE), so
+      // it scales the colour by alpha — but this pass writes *moments*, and
+      // alpha carries the speed moment, which is near zero early on. That
+      // silently multiplies the deposited mass to nothing and the entire web
+      // renders black. Mass assignment needs a true (ONE, ONE) accumulate.
+      blending: CustomBlending,
+      blendEquation: AddEquation,
+      blendSrc: OneFactor,
+      blendDst: OneFactor,
+      blendEquationAlpha: AddEquation,
+      blendSrcAlpha: OneFactor,
+      blendDstAlpha: OneFactor,
     });
     this.splatPoints = new Points(splatGeo, this.splatMat);
     this.splatPoints.frustumCulled = false;
@@ -296,9 +313,16 @@ export class CosmicWeb implements ICosmicWeb {
     /* ---- the visible particles ---- */
     const webGeo = new BufferGeometry();
     webGeo.setAttribute('position', new BufferAttribute(uv.slice(), 3));
+    // uFlat is a diagnostic override: it separates "the sprites are not
+    // rasterising" from "the colour maths is producing zero", which look
+    // identical on screen.
+    const pointsFrag = ('uniform float uFlat;\n' + POINTS_FRAG).replace(
+      'gl_FragColor = vec4(c, 1.0);',
+      'gl_FragColor = vec4(mix(c, vec3(2.0, 1.1, 0.35) * falloff, uFlat), 1.0);'
+    );
     this.pointsMat = new ShaderMaterial({
       vertexShader: POINTS_VERT,
-      fragmentShader: POINTS_FRAG,
+      fragmentShader: pointsFrag,
       uniforms: {
         uPos: new Uniform(null),
         uVel: new Uniform(null),
@@ -306,15 +330,24 @@ export class CosmicWeb implements ICosmicWeb {
         uDisp: new Uniform(null),
         uGrowthRate: new Uniform(0),
         uDisplayScale: new Uniform(1),
-        uSize: new Uniform(1.0),
+        // A particle stands for a chunk of the box, not a point: at one pixel
+        // the sprite's own radius test (r2 > 1 discards) throws away the whole
+        // quad on drivers that give a degenerate gl_PointCoord, and the web
+        // vanishes despite every draw succeeding.
+        uSize: new Uniform(2.6),
         uPixelScale: new Uniform(600),
-        uMinSize: new Uniform(1.0),
+        uMinSize: new Uniform(3.0),
         uMaxSize: new Uniform(quality.tier === 'ultra' ? 26 : 16),
-        uBrightness: new Uniform(1.0),
+        // Each particle stands in for M_total/N of mass, so a lower tier's
+        // particles are individually heavier and must be individually brighter
+        // or the whole web dims as quality drops. Square-root keeps it from
+        // overshooting into a blown-out smear at the very low counts.
+        uBrightness: new Uniform(Math.min(6, Math.sqrt(262144 / this.particles))),
         uDivScale: new Uniform(3.0),
         uHalfBox: new Uniform(BOX_MPC * 0.5),
         uFadeStart: new Uniform(0.82),
         uFar: new Uniform(BOX_MPC * 2.4),
+        uFlat: new Uniform(0),
       },
       transparent: true,
       depthWrite: false,
@@ -428,7 +461,8 @@ export class CosmicWeb implements ICosmicWeb {
     /* ---- 2. blur: x,y,z at stride 1, then again at stride 2 ---- */
     let a = this.gridA!;
     let b = this.gridB!;
-    for (const stride of [1, 2]) {
+    const skipBlur = this.showGrid === 'splat';
+    for (const stride of skipBlur ? [] : [1, 2]) {
       for (const axis of AXES) {
         this.blurMat!.uniforms.uSrc.value = textureOf(a, 0);
         (this.blurMat!.uniforms.uAxis.value as Vector3).copy(axis);
@@ -476,7 +510,9 @@ export class CosmicWeb implements ICosmicWeb {
     this.quad.run(renderer, this.hazeMat!, this.hazeTarget!);
     if (this.showGrid) {
       this.compositeMat!.uniforms.uHaze.value = density;
-      this.compositeMat!.uniforms.uGain.value = 2.0;
+      // Raw counts, not radiance — a cell holds a handful of particles, so it
+      // needs a big gain to be visible at all through the tone curve.
+      this.compositeMat!.uniforms.uGain.value = 0.35;
     } else {
       this.compositeMat!.uniforms.uHaze.value = textureOf(this.hazeTarget!, 0);
       this.compositeMat!.uniforms.uGain.value = 1.0;
@@ -500,6 +536,7 @@ export class CosmicWeb implements ICosmicWeb {
 
   /** Draw the splat points into the grid atlas with additive blending. */
   private renderSplat(renderer: WebGLRenderer, target: WebGLRenderTarget): void {
+    const before = renderer.info.render.calls;
     const prev = renderer.getRenderTarget();
     const prevAuto = renderer.autoClear;
     renderer.autoClear = false;
@@ -509,14 +546,85 @@ export class CosmicWeb implements ICosmicWeb {
     renderer.render(this.splatScene, _splatCam);
     renderer.setRenderTarget(prev);
     renderer.autoClear = prevAuto;
+    this.diag.splatDraws = renderer.info.render.calls - before;
+    this.diag.splatPoints = renderer.info.render.points;
+    this.diag.splatCount = (this.splatPoints?.geometry.getAttribute('position') as any)?.count ?? -1;
+    this.diag.uPosBound = this.splatMat?.uniforms.uPos.value ? 1 : 0;
   }
 
   /* ═══════════════════════════════════════════════════════════════════════
      API
      ═══════════════════════════════════════════════════════════════════════ */
 
-  /** Diagnostic: paint the density grid over the frame instead of the haze. */
-  showGrid = false;
+  /**
+   * Diagnostic: paint a pipeline stage over the frame instead of the haze.
+   * 'splat' skips the blur entirely, which is the only way to tell a failed
+   * mass assignment apart from a failed blur — both end as a black grid.
+   */
+  showGrid: false | 'splat' | 'blur' = false;
+
+  /**
+   * Max density carried on the particles themselves. The points colour and
+   * brighten from this, so if it is zero they render black no matter how good
+   * the density grid looks.
+   */
+  /**
+   * Diagnostic: swap the custom point material for a stock one. The geometry's
+   * `position` attribute holds texture coordinates, not world positions, so
+   * this draws every particle in a tiny blob at the origin — which is exactly
+   * the point: if that blob appears, the object is reaching the framebuffer
+   * and the custom vertex shader is what is losing it.
+   */
+  setFlat(v: boolean): void {
+    if (this.pointsMat) this.pointsMat.uniforms.uFlat.value = v ? 1 : 0;
+    if (!this.webPoints) return;
+    if (v) {
+      if (!this.stockMat) {
+        this.stockMat = new PointsMaterial({
+          size: 8,
+          sizeAttenuation: false,
+          color: 0xffaa44,
+          depthTest: false,
+          depthWrite: false,
+          toneMapped: false,
+        });
+      }
+      this.webPoints.material = this.stockMat;
+    } else if (this.pointsMat) {
+      this.webPoints.material = this.pointsMat;
+    }
+  }
+  private stockMat: PointsMaterial | null = null;
+
+  probeRho(renderer: WebGLRenderer): Record<string, number> {
+    if (!this.built || !this.simA) return { built: 0 };
+    const n = 256;
+    const buf = new Float32Array(4 * n);
+    let maxRho = 0;
+    let maxPos = 0;
+    let rows = 0;
+    for (let row = 0; row < this.texH; row += Math.max(1, Math.floor(this.texH / 8))) {
+      try {
+        renderer.readRenderTargetPixels(this.simA, 0, row, n, 1, buf, undefined as any, 0);
+      } catch {
+        return { readError: 1 };
+      }
+      rows++;
+      for (let i = 0; i < n; i++) {
+        const w = buf[i * 4 + 3];
+        const x = Math.abs(buf[i * 4]);
+        if (Number.isFinite(w) && w > maxRho) maxRho = w;
+        if (Number.isFinite(x) && x > maxPos) maxPos = x;
+      }
+    }
+    return {
+      maxRho: Number(maxRho.toFixed(4)),
+      maxPos: Number(maxPos.toFixed(2)),
+      rows,
+      brightness: Number((this.pointsMat?.uniforms.uBrightness.value ?? 0).toFixed(3)),
+      pixelScale: Number((this.pointsMat?.uniforms.uPixelScale.value ?? 0).toFixed(1)),
+    };
+  }
 
   setTimeRate(rate: number): void {
     this.timeRate = Math.max(0, rate);
