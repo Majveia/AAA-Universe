@@ -445,15 +445,27 @@ export class SurfaceRealm implements Realm {
     this.sun.intensity = intensity * Math.PI * 1.35;
 
     // Ambient stands in for sky bounce: blue and strong under a thick
-    // atmosphere, almost nothing on an airless rock.
+    // atmosphere, almost nothing on an airless rock — and it has to follow the
+    // sun down. A directional light is not occluded by the planet it is
+    // lighting, so without this the night side kept a full daylight sky term
+    // and every night shot came out as blue afternoon.
     const a = this.spec.atmosphere;
     const air = a.present ? Math.min(1.4, a.surfacePressurePa / 101325) : 0;
+    const se = this.sunDir.dot(_dir.copy(this.camera.position).normalize());
+    // Civil twilight: the sky stays lit for a while after the sun has set,
+    // because the air above you is still in sunlight.
+    const day = MathUtils.clamp((se + 0.14) / 0.26, 0, 1);
+    // Low sun reddens the sky bounce: the short wavelengths have already been
+    // scattered out of the beam before it reaches the air overhead.
+    const warm = 1 - MathUtils.clamp(se / 0.25, 0, 1);
     this.ambient.color.setRGB(
-      0.08 + a.tint[0] * 0.35 * air,
-      0.10 + a.tint[1] * 0.40 * air,
-      0.16 + a.tint[2] * 0.55 * air
+      (0.08 + a.tint[0] * 0.35 * air) * (1 + warm * 0.85),
+      (0.10 + a.tint[1] * 0.40 * air) * (1 + warm * 0.18),
+      (0.16 + a.tint[2] * 0.55 * air) * (1 - warm * 0.42)
     );
-    this.ambient.intensity = 0.15 + air * 0.85;
+    // Airglow and starlight keep the night from being an absolute void.
+    const nightFloor = 0.006 + air * 0.010;
+    this.ambient.intensity = (0.15 + air * 0.85) * intensity * Math.PI * 0.32 * (nightFloor + (1 - nightFloor) * day);
   }
 
   private updateHud(ctx: RealmContext, altitude: number): void {

@@ -357,10 +357,10 @@ export class CosmicWeb implements ICosmicWeb {
         // Calibrated by sweep against a rendered image. Additive sprites
         // overlap heavily toward the centre of the volume, so per-sprite
         // radiance stays low and the structure comes from accumulation.
-        uBrightness: new Uniform(0.058 * Math.min(6, Math.sqrt(262144 / this.particles))),
+        uBrightness: new Uniform(0.018 * Math.min(6, Math.sqrt(262144 / this.particles))),
         uDivScale: new Uniform(3.0),
         uHalfBox: new Uniform(BOX_MPC * 0.5),
-        uFadeStart: new Uniform(0.90),
+        uFadeStart: new Uniform(0.78),
         uFar: new Uniform(BOX_MPC * 2.4),
         uFlat: new Uniform(0),
       },

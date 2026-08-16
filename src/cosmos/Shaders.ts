@@ -73,7 +73,7 @@ const PALETTE_CHUNK = /* glsl */ `
 vec3 webColour(float rho, float infall, float heat){
   float t = clamp(log2(1.0 + max(rho, 0.0)) / 5.6, 0.0, 1.0);
 
-  vec3 cVoid  = vec3(0.050, 0.078, 0.245);  // indigo, barely above black
+  vec3 cVoid  = vec3(0.030, 0.048, 0.160);  // indigo, barely above black
   vec3 cSheet = vec3(0.135, 0.300, 0.620);  // cold steel — a collapsing pancake
   vec3 cFil   = vec3(0.720, 0.410, 0.330);  // dusty rose — the filaments
   vec3 cNode  = vec3(1.000, 0.735, 0.395);  // amber gold — the knots
@@ -95,9 +95,21 @@ vec3 webColour(float rho, float infall, float heat){
   return c;
 }
 
-/** Emitted radiance, before colour. Superlinear so nodes bloom and voids don't. */
+/**
+ * Emitted radiance, before colour.
+ *
+ * Recombination emission goes as the square of the density, so this exponent is
+ * a physical quantity and not a contrast knob — and it happens to be exactly
+ * what the image needs. At 0.92 the response was near-linear, so a void at
+ * rho = 0.2 emitted a twentieth of a filament at rho = 5, which over a quarter
+ * of a million additively-blended particles filled the voids with haze and
+ * turned the whole web into a glowing ball. At 1.6 that ratio is 1:170: the
+ * voids go properly black, the filaments read as filaments, and a cluster core
+ * sits forty times above the strands feeding it, which is what gives bloom
+ * something to bite on.
+ */
 float webIntensity(float rho){
-  return pow(max(rho, 0.0), 0.92);
+  return pow(max(rho, 0.0), 1.6);
 }
 
 /**
