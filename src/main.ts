@@ -128,6 +128,11 @@ async function boot(): Promise<void> {
     pause: (v: boolean) => (engine.paused = v),
     timeScale: (v: number) => (engine.timeScale = v),
     hideHud: (v: boolean) => hud.setVisible(!v),
+    // Per-realm camera posing, so the screenshot harness can frame a shot.
+    cosmosView: (o: any) => cosmos.debugView(o),
+    galaxyView: (o: any) => galaxy.debugView(o),
+    systemView: (o: any) => system.debugView(o),
+    planetView: (o: any) => surface.debugView(o),
   };
 }
 
