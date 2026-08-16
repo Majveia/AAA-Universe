@@ -202,9 +202,20 @@ async function main() {
   });
 
   const logs = [];
+  const shaderErrors = [];
+  const noisy = /useProgram: program not valid|Feedback loop formed/;
   page.on('console', (m) => {
     const t = m.type();
-    if (t === 'error' || t === 'warning') logs.push(`[${t}] ${m.text()}`);
+    if (t !== 'error' && t !== 'warning') return;
+    const text = m.text();
+    // A failed shader compile is silent on screen — it just draws black — so it
+    // must never scroll past in a wall of the same repeated GL warning.
+    if (/Shader Error|ERROR: 0:/.test(text)) {
+      shaderErrors.push(text);
+      console.error(`\n!! SHADER ERROR\n${text.split('\n').slice(0, 24).join('\n')}\n`);
+    }
+    if (noisy.test(text) && logs.some((l) => noisy.test(l))) return;
+    logs.push(`[${t}] ${text}`);
   });
   page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`));
 
@@ -237,6 +248,22 @@ async function main() {
 
       await sleep(shot.settle ?? SETTLE);
 
+      // Terrain streams in over many frames. Shooting on a timer catches it
+      // half-built; wait for the LOD queue to actually drain instead.
+      if (shot.id.startsWith('planet') || shot.id.startsWith('surface')) {
+        await page
+          .waitForFunction(
+            () => {
+              const t = window.__aeon.planetDebug?.()?.terrain;
+              return !t || t.queued === 0;
+            },
+            null,
+            { timeout: 240000, polling: 1000 }
+          )
+          .catch(() => {});
+        await sleep(1500);
+      }
+
       // Wait for the frame rate to stabilise so we don't shoot mid-stream-in.
       await page
         .waitForFunction(
@@ -249,9 +276,33 @@ async function main() {
         )
         .catch(() => {});
 
+      if (shot.id === 'planet-orbit') {
+        await page.evaluate(() => {
+          window.__aeon.planetLayer?.('ocean', false);
+          window.__aeon.planetLayer?.('atmosphere', false);
+        });
+        await sleep(2500);
+        await page.screenshot({ path: path.join(OUT, 'planet-terrain-only.png'), timeout: 180000 });
+        console.log('\n  wrote planet-terrain-only.png');
+        await page.evaluate(() => window.__aeon.plainTerrain?.(true));
+        await sleep(2500);
+        await page.screenshot({ path: path.join(OUT, 'planet-terrain-plain.png'), timeout: 180000 });
+        console.log('  wrote planet-terrain-plain.png');
+        await page.evaluate(() => window.__aeon.plainTerrain?.(false));
+        await sleep(1500);
+        await page.evaluate(() => {
+          window.__aeon.planetLayer?.('ocean', true);
+          window.__aeon.planetLayer?.('atmosphere', true);
+        });
+        await sleep(2000);
+      }
       const file = path.join(OUT, `${shot.id}.png`);
       await page.screenshot({ path: file, type: 'png', timeout: 180000 });
       const stats = await page.evaluate(() => window.__aeon.stats());
+      if (shot.id.startsWith('planet') || shot.id.startsWith('surface')) {
+        const pd = await page.evaluate(() => window.__aeon.planetDebug?.());
+        console.log('\n  planet:', JSON.stringify(pd));
+      }
       manifest.push({ id: shot.id, title: shot.title, file, stats });
       console.log(`ok  (${stats.fps.toFixed(0)} fps, ${stats.drawCalls} draws)`);
     } catch (e) {

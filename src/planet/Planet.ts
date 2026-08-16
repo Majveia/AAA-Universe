@@ -19,12 +19,14 @@ import {
   FrontSide,
   Group,
   Mesh,
+  MeshNormalMaterial,
   MeshStandardMaterial,
   Object3D,
   PlaneGeometry,
   ShaderMaterial,
   SphereGeometry,
   Uniform,
+  Vector2,
   Vector3,
 } from 'three';
 import type { IPlanet, SurfaceSample, SystemContext } from '../api/Contracts';
@@ -76,6 +78,7 @@ uniform vec3  uAbsorb;
 uniform float uHRayleigh;
 uniform float uHMie;
 uniform float uSteps;
+uniform float uScatterGain;
 
 varying vec3 vWorld;
 
@@ -154,7 +157,11 @@ void main(){
     sumM += tr * dM;
   }
 
-  vec3 col = (sumR * uRayleigh * phaseR + sumM * uMie * phaseM) * uSunColor * uSunIntensity * 22.0;
+  // The scattering integral is in per-metre units over a path of millions of
+  // metres, so the raw result is enormous. This is the single scalar that turns
+  // it into radiance the tone curve can hold; at 22 it buried the terrain under
+  // a flat wash and overexposed the forward-scattering lobe into a green blob.
+  vec3 col = (sumR * uRayleigh * phaseR + sumM * uMie * phaseM) * uSunColor * uSunIntensity * uScatterGain;
 
   // The alpha is how much of what is behind the shell survives — so a thick
   // atmosphere genuinely hides the stars, and a thin one barely tints them.
@@ -283,8 +290,11 @@ void main(){
 
   // Sun glint: a very tight lobe, allowed to go far above 1.0 so the bloom
   // turns it into the streak that reads as "sea" from any distance.
-  float spec = pow(max(dot(N, H), 0.0), 900.0) * 90.0
-             + pow(max(dot(N, H), 0.0), 90.0) * 3.0;
+  // Sun glint. It should be a hot, tight streak on the waves — not a floodlight
+  // that swallows the whole sub-solar hemisphere. The wide lobe carries most of
+  // what the eye reads as "water"; the tight one is the sparkle on the crests.
+  float spec = pow(max(dot(N, H), 0.0), 900.0) * 7.0
+             + pow(max(dot(N, H), 0.0), 90.0) * 0.7;
 
   vec3 body = mix(uDeep, uShallow, ndl * 0.6 + 0.25);
   // Subsurface: light that made it through the crest and back out.
@@ -377,6 +387,7 @@ export class Planet implements IPlanet {
         uHRayleigh: new Uniform(a.scaleHeightM),
         uHMie: new Uniform(a.scaleHeightM * 0.22),
         uSteps: new Uniform(16),
+        uScatterGain: new Uniform(1.6),
       },
       transparent: true,
       depthWrite: false,
@@ -484,6 +495,46 @@ export class Planet implements IPlanet {
     this.viewer.copy(localPosition);
   }
 
+  /** Diagnostic: terrain LOD state. */
+  stats(): Record<string, any> {
+    const q = this.quad.stats();
+    // Sample the height field over the whole sphere: if the rendered world is
+    // all ocean, this says whether the terrain is genuinely submerged or the
+    // sea level is simply in the wrong place.
+    const N = 400;
+    const sea = this.seaLevelRadius();
+    let min = Infinity;
+    let max = -Infinity;
+    let sum = 0;
+    let above = 0;
+    const d = new Vector3();
+    for (let i = 0; i < N; i++) {
+      const y = 1 - (i / (N - 1)) * 2;
+      const r = Math.sqrt(Math.max(0, 1 - y * y));
+      const t = i * 2.399963;
+      d.set(Math.cos(t) * r, y, Math.sin(t) * r);
+      const h = this.heightAt(d);
+      min = Math.min(min, h);
+      max = Math.max(max, h);
+      sum += h;
+      if (sea > 0 && this.radius + h > sea) above++;
+    }
+    return {
+      ...q,
+      builtEver: (this.quad as any).builtEver,
+      radius: Math.round(this.radius),
+      klass: this.spec.klass,
+      hMin: Math.round(min),
+      hMax: Math.round(max),
+      hMean: Math.round(sum / N),
+      maxElev: Math.round(this.field.maxElev),
+      seaMinusR: Math.round(sea - this.radius),
+      landFrac: Number((above / N).toFixed(3)),
+      specLandFrac: this.spec.terrain.landFraction,
+      oceanLevel: this.spec.ocean.level,
+    };
+  }
+
   isReady(): boolean {
     return this.quad.stats().patches > 0;
   }
@@ -551,13 +602,40 @@ export class Planet implements IPlanet {
     }
   }
 
+  private plainMat: MeshNormalMaterial | null = null;
+  /**
+   * Diagnostic: swap the terrain for a material that needs no lights and no
+   * uniforms. If this shows geometry, the patches and their placement are fine
+   * and the fault is in the terrain material.
+   */
+  setPlainTerrain(v: boolean): void {
+    if (v) {
+      if (!this.plainMat) this.plainMat = new MeshNormalMaterial();
+      this.quad.setMaterials(this.plainMat, null);
+    } else {
+      this.quad.setMaterials(this.terrainMat, null);
+    }
+  }
+
+  /** Diagnostic: isolate a layer. */
+  setLayerVisible(layer: 'ocean' | 'atmosphere' | 'terrain', v: boolean): void {
+    if (layer === 'ocean') {
+      if (this.oceanFar) this.oceanFar.visible = v;
+      if (this.oceanNear) this.oceanNear.visible = v;
+    } else if (layer === 'atmosphere') {
+      if (this.atmo) this.atmo.visible = v;
+    } else {
+      this.quad.root.visible = v;
+    }
+  }
+
   setQuality(q: QualityProfile): void {
     this.quality = q;
     this.quad.setOptions({
       maxDepth: Math.min(16, q.terrainMaxDepth),
       patchRes: q.terrainPatchRes,
       budgetMsPerFrame: Math.max(1, q.terrainBudgetPerFrame),
-      pixelError: q.tier === 'ultra' ? 2.0 : q.tier === 'high' ? 3.0 : 5.0,
+      pixelError: q.tier === 'ultra' ? 1.5 : q.tier === 'high' ? 2.0 : 3.0,
       maxPatches: q.tier === 'ultra' ? 1400 : q.tier === 'high' ? 900 : 500,
     });
     this.terrainMat.flatShading = false;
@@ -581,4 +659,4 @@ export class Planet implements IPlanet {
 
 const _d = new Vector3();
 const _up = new Vector3();
-const _sz = { x: 1920, y: 1080 } as any;
+const _sz = new Vector2();

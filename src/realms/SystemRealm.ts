@@ -19,6 +19,7 @@
  */
 
 import {
+  AdditiveBlending,
   AmbientLight,
   BufferAttribute,
   BufferGeometry,
@@ -30,6 +31,8 @@ import {
   PointsMaterial,
   Vector2,
   Scene,
+  ShaderMaterial,
+  Uniform,
   Vector3,
 } from 'three';
 import type { Realm, RealmContext } from '../core/Realm';
@@ -40,6 +43,56 @@ import { orbitPolyline, orbitalPosition } from './Orbits';
 import { AU, type PlanetSpec, type StarSystemSpec } from '../universe/Types';
 import type { HudTarget } from '../api/Contracts';
 import { Rng } from '../core/Rand';
+
+
+/**
+ * Planets, from far enough away to be points.
+ *
+ * A planet at interplanetary distance is well under a pixel across, so the
+ * sphere renderer has nothing to draw and the system looks empty. These are
+ * the same worlds as points of reflected sunlight, with a floor on their size
+ * so they never blink out — which is exactly what a planet looks like from
+ * across a solar system.
+ */
+const BODY_GLOW_VERT = /* glsl */ `
+#include <common>
+#include <logdepthbuf_pars_vertex>
+uniform float uPixPerRad;
+attribute vec3 aColor;
+attribute float aFlux;
+attribute float aRadius;
+varying vec3 vColor;
+varying float vI;
+void main(){
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  gl_Position = projectionMatrix * mv;
+  float dist = max(-mv.z, 1.0);
+  float truePx = (aRadius / dist) * uPixPerRad * 2.0;
+  float drawn = clamp(truePx * 3.0, 4.0, 90.0);
+  gl_PointSize = drawn;
+  float au = dist / 1.495978707e11;
+  vColor = aColor;
+  // Reflected flux falls off with distance from the viewer as well as from
+  // the star; aFlux already carries the star-side term.
+  vI = aFlux / max(1e-8, au * au) * 2600.0 / max(1.0, drawn * drawn);
+  #include <logdepthbuf_vertex>
+}
+`;
+
+const BODY_GLOW_FRAG = /* glsl */ `
+#include <common>
+#include <logdepthbuf_pars_fragment>
+varying vec3 vColor;
+varying float vI;
+void main(){
+  #include <logdepthbuf_fragment>
+  vec2 d = gl_PointCoord - 0.5;
+  float r2 = dot(d, d) * 4.0;
+  if (r2 > 1.0) discard;
+  float a = exp(-r2 * 5.0) + 0.18 * exp(-r2 * 1.1);
+  gl_FragColor = vec4(vColor * (vI * a), 1.0);
+}
+`;
 
 interface BodyEntry {
   spec: PlanetSpec;
@@ -67,6 +120,7 @@ export class SystemRealm implements Realm {
   private star = new StarRenderer();
   private bodies: BodyEntry[] = [];
   private belt: Points | null = null;
+  private bodyGlow: Points | null = null;
   private beltBase: Float32Array | null = null;
 
   /** Absolute camera position in system coordinates, metres (doubles). */
@@ -176,6 +230,46 @@ export class SystemRealm implements Realm {
       this.belt = new Points(geo, mat);
       this.scene.add(this.belt);
     }
+
+    /* ---- one point of reflected light per world ---- */
+    if (this.bodies.length) {
+      const n = this.bodies.length;
+      const g = new BufferGeometry();
+      g.setAttribute('position', new BufferAttribute(new Float32Array(n * 3), 3));
+      const col = new Float32Array(n * 3);
+      const flux = new Float32Array(n);
+      const rad = new Float32Array(n);
+      const lsol = primary.luminosityW / 3.828e26;
+      for (let i = 0; i < n; i++) {
+        const p = this.bodies[i].spec;
+        // Albedo-weighted colour: what the world actually reflects.
+        const pal = p.atmosphere.present ? p.atmosphere.tint : p.palette.lowland;
+        col[i * 3] = Math.max(0.08, pal[0]);
+        col[i * 3 + 1] = Math.max(0.08, pal[1]);
+        col[i * 3 + 2] = Math.max(0.08, pal[2]);
+        const aAu = p.orbit.a / 1.495978707e11;
+        // Insolation at the planet, times what it bounces back.
+        flux[i] = (lsol / Math.max(1e-6, aAu * aAu)) * p.albedo * Math.pow(p.radiusM / 6.371e6, 2);
+        rad[i] = p.radiusM;
+      }
+      g.setAttribute('aColor', new BufferAttribute(col, 3));
+      g.setAttribute('aFlux', new BufferAttribute(flux, 1));
+      g.setAttribute('aRadius', new BufferAttribute(rad, 1));
+      const mat = new ShaderMaterial({
+        vertexShader: BODY_GLOW_VERT,
+        fragmentShader: BODY_GLOW_FRAG,
+        uniforms: { uPixPerRad: new Uniform(540) },
+        transparent: true,
+        depthWrite: false,
+        depthTest: false,
+        blending: AdditiveBlending,
+        toneMapped: false,
+      });
+      this.bodyGlow = new Points(g, mat);
+      this.bodyGlow.frustumCulled = false;
+      this.bodyGlow.renderOrder = 18;
+      this.scene.add(this.bodyGlow);
+    }
   }
 
   update(dt: number, ctx: RealmContext): void {
@@ -214,6 +308,9 @@ export class SystemRealm implements Realm {
     const size = ctx.renderer.getDrawingBufferSize(_sz);
     const pixPerRad = size.y * 0.5 / Math.tan((this.camera.fov * Math.PI) / 360);
     this.star.update(dt, this.camera.position, pixPerRad);
+    if (this.bodyGlow) {
+      (this.bodyGlow.material as ShaderMaterial).uniforms.uPixPerRad.value = pixPerRad;
+    }
 
     /* ---- HUD ---- */
     const hud = ctx.services.hud;
@@ -312,6 +409,19 @@ export class SystemRealm implements Realm {
     }
 
     if (this.belt) this.belt.position.set(-this.origin.x, -this.origin.y, -this.origin.z);
+
+    if (this.bodyGlow) {
+      const attr = this.bodyGlow.geometry.getAttribute('position') as BufferAttribute;
+      for (let i = 0; i < this.bodies.length; i++) {
+        const b = this.bodies[i];
+        this.toLocal(b.absolute, _tmpA);
+        // Once the sphere is resolved, park the sprite behind the camera so the
+        // two never double up into an over-bright blob.
+        if (b.built && b.angular > 0.004) _tmpA.set(0, 0, 1e12);
+        attr.setXYZ(i, _tmpA.x, _tmpA.y, _tmpA.z);
+      }
+      attr.needsUpdate = true;
+    }
   }
 
   private toLocal(absolute: Vector3, out: Vector3): Vector3 {
@@ -369,6 +479,12 @@ export class SystemRealm implements Realm {
       }
     }
     this.bodies = [];
+    if (this.bodyGlow) {
+      this.scene.remove(this.bodyGlow);
+      this.bodyGlow.geometry.dispose();
+      (this.bodyGlow.material as ShaderMaterial).dispose();
+      this.bodyGlow = null;
+    }
     if (this.belt) {
       this.scene.remove(this.belt);
       this.belt.geometry.dispose();

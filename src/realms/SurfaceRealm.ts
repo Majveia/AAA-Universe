@@ -83,7 +83,11 @@ export class SurfaceRealm implements Realm {
   constructor() {
     this.scene.background = new Color(0x000000);
     this.scene.add(this.ambient);
-    this.sun.castShadow = true;
+    // No shadows from this light. A DirectionalLight's default shadow camera is
+    // a ten-metre box; on a world 11,000 km across every fragment lands outside
+    // it and samples as fully shadowed, which renders the entire planet black.
+    // Planet-scale shadows need a cascaded setup, which this does not have yet.
+    this.sun.castShadow = false;
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
   }
@@ -91,18 +95,43 @@ export class SurfaceRealm implements Realm {
   async enter(ctx: RealmContext, payload?: any): Promise<void> {
     const universe = ctx.services.universe;
     const system: StarSystemSpec = payload?.system ?? universe.findHomeSystem();
-    const spec: PlanetSpec =
-      payload?.planet ??
-      system.planets.find((p) => p.klass === 'terran') ??
-      system.planets.find((p) => p.notable) ??
-      system.planets[0];
+    // Prefer somewhere landable: a gas or ice giant has no surface, so
+    // defaulting to one makes every surface view an empty sky.
+    const landable = (p: PlanetSpec) => p.klass !== 'gas-giant' && p.klass !== 'ice-giant';
+    const pickFrom = (sys: StarSystemSpec): PlanetSpec | undefined =>
+      sys.planets.find((p) => p.klass === 'terran') ??
+      sys.planets.find((p) => landable(p) && p.notable) ??
+      sys.planets.find(landable);
+
+    let chosen = payload?.planet as PlanetSpec | undefined;
+    let host = system;
+    if (!chosen) {
+      chosen = pickFrom(system);
+      if (!chosen) {
+        // Some systems are all gas. Rather than drop the player onto a world
+        // with no surface, look outward until we find one worth standing on.
+        const near = universe.systemsNear(
+          system.position[0], system.position[1], system.position[2], 260
+        ) as StarSystemSpec[];
+        near.sort((a: StarSystemSpec, b: StarSystemSpec) => (b.notable ? 1 : 0) - (a.notable ? 1 : 0));
+        for (const s of near) {
+          const c = pickFrom(s);
+          if (c) {
+            chosen = c;
+            host = s;
+            break;
+          }
+        }
+      }
+    }
+    const spec: PlanetSpec = chosen ?? system.planets[0];
 
     if (!spec) throw new Error('No planet to land on');
 
     this.simTime = payload?.simTime ?? 0;
     this.timeInRealm = 0;
     this.titleShown = false;
-    this.system = system;
+    this.system = host;
 
     if (this.spec?.seed !== spec.seed) {
       await this.buildWorld(spec, ctx);
@@ -390,6 +419,27 @@ export class SurfaceRealm implements Realm {
         ? `${localName ? `${localName} · ` : ''}${w ? describeWeather(w) : describe(this.spec)}`
         : `${describe(this.spec)} · ${formatAltitude(altitude)}`;
     hud.setLocation(this.spec.name, sub);
+  }
+
+  /** Diagnostic: what the planet stack is actually doing. */
+  setPlainTerrain(v: boolean): void {
+    (this.planet as any)?.setPlainTerrain?.(v);
+  }
+
+  setLayer(layer: any, v: boolean): void {
+    (this.planet as any)?.setLayerVisible?.(layer, v);
+  }
+
+  debugPlanet(): any {
+    return {
+      hasPlanet: !!this.planet,
+      mode: this.mode,
+      spec: this.spec?.name,
+      klass: this.spec?.klass,
+      terrain: (this.planet as any)?.stats?.(),
+      camDist: this.camera.position.length(),
+      radius: this.spec?.radiusM,
+    };
   }
 
   resize(w: number, h: number): void {

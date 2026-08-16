@@ -70,8 +70,6 @@ const VERT_BODY = /* glsl */ `
 `;
 
 const FRAG_PARS = /* glsl */ `
-${GLSL_NOISE}
-${GLSL_COLOR}
 
 uniform vec3  uCamLocal;
 uniform float uDetailF0;
@@ -260,11 +258,17 @@ export function makeTerrainMaterial(
       .replace('#include <begin_vertex>', `#include <begin_vertex>\n${VERT_BODY}`);
 
     shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', `#include <common>\n${fieldGlsl}\n${FRAG_PARS}`)
-      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${NORMAL_BODY}`)
       .replace(
-        '#include <roughnessmap_fragment>',
-        `#include <roughnessmap_fragment>\n${fragBody()}`
+        '#include <common>',
+        `#include <common>\n${GLSL_NOISE}\n${GLSL_COLOR}\n${fieldGlsl}\n${FRAG_PARS}`
+      )
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${NORMAL_BODY}`)
+      // Must land after <metalnessmap_fragment>, not after <roughnessmap_fragment>:
+      // three declares metalnessFactor in the later chunk, and writing to it one
+      // chunk early fails the whole program to compile (silent black terrain).
+      .replace(
+        '#include <metalnessmap_fragment>',
+        `#include <metalnessmap_fragment>\n${fragBody()}`
       );
   };
 

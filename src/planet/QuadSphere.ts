@@ -299,9 +299,15 @@ export class QuadSphere {
     // cells would project to more than `pixelError` pixels of vertical error.
     const tanHalf = Math.tan(Math.max(0.05, fovY) * 0.5);
     const res = this.opts.patchRes;
+    // Split distance for a patch of arc A is A * lodFactor, where lodFactor is
+    // how many patch-widths away one cell still projects to `pixelError` pixels:
+    //   cellPx = (A / (res-1)) * screenH / (2 * tan(fov/2) * d)
+    // Setting cellPx = pixelError and solving for d gives the factor below. The
+    // extra 0.5 that used to be here halved every split distance and pinned the
+    // whole terrain at its minimum subdivision.
     this.lodFactor = Math.min(
-      9,
-      Math.max(1.7, (screenH / (2 * tanHalf * Math.max(0.5, this.opts.pixelError))) * (0.5 / (res - 1))),
+      16,
+      Math.max(1.7, screenH / (2 * tanHalf * Math.max(0.5, this.opts.pixelError) * (res - 1))),
     );
 
     for (let l = 0; l <= this.opts.maxDepth + 1; l++) {

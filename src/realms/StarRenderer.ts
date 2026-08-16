@@ -406,14 +406,18 @@ export class StarRenderer {
         uniforms: {
           uPixPerRad: new Uniform(540),
           uRadius: new Uniform(Math.max(r, 1)),
-          uMinPx: new Uniform(6),
+          uMinPx: new Uniform(14),
           uMaxPx: new Uniform(160),
           uLum: new Uniform(lum),
-          uExposure: new Uniform(2600),
+          uExposure: new Uniform(70000),
           uColor: new Uniform(new Color(...(isBH ? [1.0, 0.72, 0.42] : spec.color))),
         },
         transparent: true,
         depthWrite: false,
+        // The sprite sits at the star's centre, which is *inside* the
+        // photosphere sphere — with depth testing on it fails against the
+        // sphere's own front face and is discarded every frame.
+        depthTest: false,
         blending: AdditiveBlending,
         toneMapped: false,
       });
