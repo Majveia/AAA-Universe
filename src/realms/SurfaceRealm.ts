@@ -46,6 +46,7 @@ import type {
 } from '../api/Contracts';
 import { makeGalaxy } from '../universe/Universe';
 import { hashCombine } from '../core/Rand';
+import type { QualityProfile } from '../core/Settings';
 import type { PlanetSpec, StarSystemSpec } from '../universe/Types';
 
 type Mode = 'orbit' | 'ground';
@@ -84,15 +85,13 @@ export class SurfaceRealm implements Realm {
   private landingDir = new Vector3(0, 1, 0);
   private titleShown = false;
   private hudRef: any = null;
+  private quality: QualityProfile | null = null;
 
   constructor() {
     this.scene.background = new Color(0x000000);
     this.scene.add(this.sky.root);
     this.scene.add(this.ambient);
-    // No shadows from this light. A DirectionalLight's default shadow camera is
-    // a ten-metre box; on a world 11,000 km across every fragment lands outside
-    // it and samples as fully shadowed, which renders the entire planet black.
-    // Planet-scale shadows need a cascaded setup, which this does not have yet.
+    // Configured in updateSun once we know where the player is standing.
     this.sun.castShadow = false;
     this.scene.add(this.sun);
     this.scene.add(this.sun.target);
@@ -404,11 +403,40 @@ export class SurfaceRealm implements Realm {
     this.sunColor = st0.color;
     const intensity = sunIntensity(this.spec, this.system);
 
-    // Place the shadow-casting light relative to the camera so the cascade
-    // covers what the player can actually see rather than the whole planet.
+    // One tight shadow cascade, parked on the camera.
+    //
+    // A DirectionalLight's default shadow camera is a ten-metre box; on a world
+    // 11,000 km across every fragment lands outside it and samples as fully
+    // shadowed, which renders the whole planet black — which is why this was
+    // switched off. The fix is not a bigger box (a planet-wide one has no
+    // usable depth precision) but a small one that follows the player. Beyond
+    // its range the terrain still shades itself by its own normal, and at that
+    // distance aerial perspective has washed the contrast out anyway.
     const anchor = this.camera.position;
-    this.sun.position.copy(anchor).addScaledVector(this.sunDir, 4000);
-    this.sun.target.position.copy(anchor);
+    const wantShadow = !!this.quality?.shadows && this.mode === 'ground';
+    this.sun.castShadow = wantShadow;
+    if (wantShadow) {
+      const S = SHADOW_SPAN;
+      const sc = this.sun.shadow.camera;
+      sc.left = -S; sc.right = S; sc.top = S; sc.bottom = -S;
+      sc.near = S * 0.25; sc.far = S * 4.5;
+      sc.updateProjectionMatrix();
+      // Snap the light to the texel grid, or the shadow crawls and shimmers
+      // over the ground every time the player takes a step.
+      const texel = (2 * S) / this.sun.shadow.mapSize.x;
+      const q = (v: number) => Math.round(v / texel) * texel;
+      _tmp.set(q(anchor.x), q(anchor.y), q(anchor.z));
+      this.sun.position.copy(_tmp).addScaledVector(this.sunDir, S * 2.2);
+      this.sun.target.position.copy(_tmp);
+      this.sun.shadow.bias = -0.00035;
+      // In metres, because these coordinates are metres: offset the sample
+      // along the normal rather than in depth, which is what actually kills
+      // acne on ground this coarsely tessellated.
+      this.sun.shadow.normalBias = 0.75;
+    } else {
+      this.sun.position.copy(anchor).addScaledVector(this.sunDir, 4000);
+      this.sun.target.position.copy(anchor);
+    }
     this.sun.color.setRGB(st0.color[0], st0.color[1], st0.color[2]);
     // three's Lambert BRDF divides by pi, so multiplying the irradiance by pi
     // makes a surface of albedo A return radiance A under full sun. That is the
@@ -488,7 +516,14 @@ export class SurfaceRealm implements Realm {
     this.camera.updateProjectionMatrix();
   }
 
-  setQuality(q: any): void {
+  setQuality(q: QualityProfile): void {
+    this.quality = q;
+    this.sun.shadow.mapSize.set(
+      q.tier === 'ultra' ? 4096 : q.tier === 'high' ? 2048 : 1024,
+      q.tier === 'ultra' ? 4096 : q.tier === 'high' ? 2048 : 1024
+    );
+    this.sun.shadow.map?.dispose();
+    (this.sun.shadow as any).map = null;
     this.sky.setQuality(q);
     this.planet?.setQuality(q);
     this.scatter?.setQuality(q);
@@ -737,6 +772,9 @@ export class SurfaceRealm implements Realm {
 function ctxHud(realm: any): { setContext(m: string): void } | null {
   return realm.hudRef ?? null;
 }
+
+/** Half-extent of the shadowed box around the player, metres. */
+const SHADOW_SPAN = 130;
 
 const _dir = new Vector3();
 const _tmp = new Vector3();

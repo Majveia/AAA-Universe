@@ -357,10 +357,10 @@ export class CosmicWeb implements ICosmicWeb {
         // Calibrated by sweep against a rendered image. Additive sprites
         // overlap heavily toward the centre of the volume, so per-sprite
         // radiance stays low and the structure comes from accumulation.
-        uBrightness: new Uniform(0.032 * Math.min(6, Math.sqrt(262144 / this.particles))),
+        uBrightness: new Uniform(0.058 * Math.min(6, Math.sqrt(262144 / this.particles))),
         uDivScale: new Uniform(3.0),
         uHalfBox: new Uniform(BOX_MPC * 0.5),
-        uFadeStart: new Uniform(0.82),
+        uFadeStart: new Uniform(0.90),
         uFar: new Uniform(BOX_MPC * 2.4),
         uFlat: new Uniform(0),
       },
@@ -388,7 +388,7 @@ export class CosmicWeb implements ICosmicWeb {
         uBoxHalf: new Uniform(new Vector3(BOX_MPC / 2, BOX_MPC / 2, BOX_MPC / 2)),
         uDisplayScale: new Uniform(1),
         uMeanCell: new Uniform(meanCell),
-        uGain: new Uniform(0.002),
+        uGain: new Uniform(0.0036),
         uSteps: new Uniform(quality.tier === 'ultra' ? 64 : quality.tier === 'high' ? 48 : 28),
         uDetail: new Uniform(0.55),
         uDetailFreq: new Uniform(0.06),
@@ -660,7 +660,7 @@ export class CosmicWeb implements ICosmicWeb {
     if (g.haze !== undefined && this.hazeMat) this.hazeMat.uniforms.uGain.value = g.haze;
     if (g.composite !== undefined) this.compositeGain = g.composite;
   }
-  private compositeGain = 0.12;
+  private compositeGain = 0.21;
 
   setTimeRate(rate: number): void {
     this.timeRate = Math.max(0, rate);

@@ -437,10 +437,11 @@ export class StarField {
   }
 
   /** Generate up to `n` more stars. Returns how many were actually added. */
+  /** Build the next `n` stars. Returns the running total, not the increment. */
   grow(n: number): number {
     const end = Math.min(this.count, this.built + n);
     const start = this.built;
-    if (end <= start) return 0;
+    if (end <= start) return this.built;
 
     const s = this.s;
     const pos = this.posArr;
@@ -471,7 +472,7 @@ export class StarField {
     ca.needsUpdate = true;
     la.needsUpdate = true;
     this.geo.setDrawRange(0, Math.floor(this.built * this.drawFraction));
-    return end - start;
+    return this.built;
   }
 
   /* ───────────────────────── per frame ───────────────────────── */

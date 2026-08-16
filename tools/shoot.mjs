@@ -48,7 +48,7 @@ const SHOTS = [
     title: 'Cosmic web — present epoch, wide',
     setup: async (a) => {
       await a.setRealm('cosmos');
-      await a.cosmosView?.({ epoch: 1.0, distance: 340, pitch: 0.35, yaw: 0.6 });
+      await a.cosmosView?.({ epoch: 1.0, distance: 235, pitch: 0.35, yaw: 0.6 });
     },
     settle: 4000,
   },
