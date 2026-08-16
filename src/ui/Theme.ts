@@ -531,6 +531,18 @@ export const HUD_CSS = `
 }
 .ae-pm-bar.ae-t{top:0;transform-origin:top center;}
 .ae-pm-bar.ae-b{bottom:0;transform-origin:bottom center;}
+.ae-pm-bar.ae-l,.ae-pm-bar.ae-r{
+  top:0;bottom:0;height:auto;width:50%;transform:scaleX(0);
+  transition:transform .6s var(--ae-ease);
+}
+.ae-pm-bar.ae-l{left:0;transform-origin:left center;}
+.ae-pm-bar.ae-r{right:0;transform-origin:right center;}
+.ae-pm-aspect{
+  font-size:8.5px;letter-spacing:.24em;text-transform:uppercase;color:var(--ae-dim);
+  padding:6px 10px;border:1px solid var(--ae-hair);border-radius:3px;cursor:pointer;min-width:58px;
+  text-align:center;transition:color .2s linear,border-color .2s linear;
+}
+.ae-pm-aspect:active{color:var(--ae-accent);border-color:var(--ae-accent-d);}
 .ae-pm-grid{position:absolute;inset:0;opacity:0;transition:opacity .5s var(--ae-ease);}
 .ae-pm.ae-on .ae-pm-grid{opacity:.22;}
 .ae-pm-grid i{position:absolute;background:var(--ae-ink);}
