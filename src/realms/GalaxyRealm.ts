@@ -51,7 +51,11 @@ export class GalaxyRealm implements Realm {
       const seed = from
         ? hashCombine(universe.seed, Math.round(from[0] * 7), Math.round(from[1] * 11), Math.round(from[2] * 13))
         : hashCombine(universe.seed, 0x1a7);
-      this.spec = makeGalaxy(seed, [0, 0, 0]);
+      // The galaxy you start in is a barred spiral, like the one you are
+      // reading this from. Every other galaxy is drawn from the real
+      // distribution; this one is the establishing shot and gets to be the
+      // shape everybody pictures when they hear the word.
+      this.spec = makeGalaxy(seed, [0, 0, 0], from ? undefined : 'barred-spiral');
     }
     if (!this.renderer) {
       this.renderer = new GalaxyRenderer();
@@ -178,6 +182,21 @@ export class GalaxyRealm implements Realm {
 
   locationLabel(): string {
     return this.spec?.name ?? 'Galaxy';
+  }
+
+  /** Diagnostic: what the harness is actually looking at. */
+  debugGalaxy(): Record<string, any> {
+    if (!this.spec) return { built: false };
+    return {
+      name: this.spec.name,
+      type: this.spec.type,
+      arms: this.spec.arms,
+      armPitch: Number(this.spec.armPitch.toFixed(3)),
+      barFraction: Number(this.spec.barFraction.toFixed(3)),
+      radiusLy: Math.round(this.spec.radiusLy),
+      distance: Math.round(this.orbit.distance),
+      ...((this.renderer as GalaxyRenderer | null)?.stats() ?? {}),
+    };
   }
 
   debugView(o: GalaxyViewOptions = {}): void {

@@ -79,6 +79,7 @@ export class SurfaceRealm implements Realm {
   private sunColor: [number, number, number] = [1, 1, 1];
   private landingDir = new Vector3(0, 1, 0);
   private titleShown = false;
+  private hudRef: any = null;
 
   constructor() {
     this.scene.background = new Color(0x000000);
@@ -153,6 +154,7 @@ export class SurfaceRealm implements Realm {
     this.updateSun();
 
     const hud = ctx.services.hud;
+    this.hudRef = hud ?? null;
     hud?.setContext('orbit');
     hud?.setLocation(spec.name, describe(spec));
     ctx.services.audio?.setMood('arrival', 0.7);
@@ -280,7 +282,7 @@ export class SurfaceRealm implements Realm {
 
     /* ---- world systems ---- */
     this.planet.setViewer(this.camera.position);
-    this.planet.setSun(this.sunDir, this.sunColor, sunIntensity(this.spec, this.system));
+    this.planet.setSun(this.sunDir, this.sunColor, this.sun.intensity);
     this.planet.update(dt, sysCtx);
 
     if (this.scatter) {
@@ -300,6 +302,9 @@ export class SurfaceRealm implements Realm {
     if (this.weather) {
       this.weather.setViewer(this.camera.position);
       this.weather.update(dt, sysCtx);
+      // The orbital cloud deck and the ground-level weather are the same
+      // system seen from two distances; keep them agreeing.
+      this.planet.setWeather(this.weather.state().cloudiness);
     }
 
     this.updateHud(ctx, altitude);
@@ -375,7 +380,11 @@ export class SurfaceRealm implements Realm {
     this.sun.position.copy(anchor).addScaledVector(this.sunDir, 4000);
     this.sun.target.position.copy(anchor);
     this.sun.color.setRGB(st0.color[0], st0.color[1], st0.color[2]);
-    this.sun.intensity = intensity * 3.0;
+    // three's Lambert BRDF divides by pi, so multiplying the irradiance by pi
+    // makes a surface of albedo A return radiance A under full sun. That is the
+    // normalisation the AgX curve is set up for; at 3.0 every world came out
+    // two stops under and read as a night shot.
+    this.sun.intensity = intensity * Math.PI * 1.35;
 
     // Ambient stands in for sky bounce: blue and strong under a thick
     // atmosphere, almost nothing on an airless rock.
@@ -469,10 +478,15 @@ export class SurfaceRealm implements Realm {
 
     if (mode === 'orbit' || mode === 'limb') {
       this.mode = 'orbit';
+      ctxHud(this)?.setContext('orbit');
       const d = mode === 'limb' ? R * 1.35 : R * 2.6;
       this.fly.position.set(0.55, 0.30, 0.78).normalize().multiplyScalar(d);
-      // Frame the terminator: look slightly off-centre so the lit crescent
-      // and the atmospheric limb are both in shot.
+      // A planet lit head-on is a flat disc. Wind the clock until the star sits
+      // off to one side, so the shot has a terminator, raked relief along it,
+      // and a lit limb — the three things that make a world look spherical.
+      this.frameSun(mode === 'limb' ? 2.15 : 1.10);
+      // Look slightly off-centre so the lit crescent and the atmospheric limb
+      // are both in shot.
       const aim = mode === 'limb' ? new Vector3(0, 0, 0) : new Vector3(R * 0.15, 0, 0);
       this.fly.lookAt(aim);
       this.camera.position.copy(this.fly.position);
@@ -488,6 +502,7 @@ export class SurfaceRealm implements Realm {
       this.player.spawnAt(dir, 0.6);
       this.player.setView(mode === 'ground' ? 'first' : 'third');
       this.mode = 'ground';
+      ctxHud(this)?.setContext('foot');
       this.rover?.placeAt(dir);
     } else {
       this.mode = 'orbit';
@@ -499,6 +514,32 @@ export class SurfaceRealm implements Realm {
     // Put the sun where it flatters the subject.
     if (mode === 'night') this.simTime += this.spec.rotationS * 0.5;
     else if (mode === 'city' || mode === 'ocean') this.simTime += this.spec.rotationS * 0.04;
+  }
+
+  /**
+   * Wind the planet's rotation until the star sits `want` radians away from the
+   * camera's own direction from the centre. Scanning a full day in 240 steps is
+   * exact enough — the sun moves 1.5 degrees per step — and it means the shot
+   * list can ask for "a terminator" without hard-coding a time of day per world.
+   */
+  private frameSun(want: number): void {
+    if (!this.spec) return;
+    const camDir = _tmp.copy(this.fly.position).normalize();
+    const day = this.spec.rotationS;
+    const t0 = this.simTime;
+    let best = t0;
+    let bestErr = Infinity;
+    for (let i = 0; i < 240; i++) {
+      this.simTime = t0 + (i / 240) * day;
+      this.updateSun();
+      const err = Math.abs(Math.acos(MathUtils.clamp(this.sunDir.dot(camDir), -1, 1)) - want);
+      if (err < bestErr) {
+        bestErr = err;
+        best = this.simTime;
+      }
+    }
+    this.simTime = best;
+    this.updateSun();
   }
 
   private async pickGroundSpot(mode: string): Promise<Vector3> {
@@ -568,6 +609,11 @@ export class SurfaceRealm implements Realm {
   dispose(): void {
     this.teardown();
   }
+}
+
+/** The HUD lives on the engine's service bag; debugView has no ctx of its own. */
+function ctxHud(realm: any): { setContext(m: string): void } | null {
+  return realm.hudRef ?? null;
 }
 
 const _dir = new Vector3();

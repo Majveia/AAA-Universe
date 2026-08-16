@@ -36,6 +36,7 @@ import { GLSL_COLOR, GLSL_NOISE } from '../core/Noise';
 import { TerrainField } from './TerrainField';
 import { QuadSphere } from './QuadSphere';
 import { makeTerrainMaterial, type TerrainUniforms } from './TerrainMaterial';
+import { makeClouds, type CloudDeck } from './Clouds';
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Atmosphere
@@ -293,15 +294,15 @@ void main(){
   // Sun glint. It should be a hot, tight streak on the waves — not a floodlight
   // that swallows the whole sub-solar hemisphere. The wide lobe carries most of
   // what the eye reads as "water"; the tight one is the sparkle on the crests.
-  float spec = pow(max(dot(N, H), 0.0), 900.0) * 7.0
-             + pow(max(dot(N, H), 0.0), 90.0) * 0.7;
+  float spec = pow(max(dot(N, H), 0.0), 900.0) * 2.4
+             + pow(max(dot(N, H), 0.0), 90.0) * 0.22;
 
   vec3 body = mix(uDeep, uShallow, ndl * 0.6 + 0.25);
   // Subsurface: light that made it through the crest and back out.
   float sss = pow(clamp(dot(V, -L) * 0.5 + 0.5, 0.0, 1.0), 3.0) * 0.6;
-  body += uShallow * sss * uSunIntensity * 0.8;
+  body += uShallow * sss * uSunIntensity * 0.22;
 
-  vec3 sky = uSkyTint * uSunIntensity * (0.5 + 0.5 * ndl);
+  vec3 sky = uSkyTint * uSunIntensity * (0.5 + 0.5 * ndl) * 0.30;
   vec3 col = mix(body * uSunColor * uSunIntensity * (0.25 + 0.75 * ndl), sky, F);
   col += uSunColor * uSunIntensity * spec * ndl;
 
@@ -329,6 +330,7 @@ export class Planet implements IPlanet {
   private atmo: Mesh | null = null;
   private oceanFar: Mesh | null = null;
   private oceanNear: Mesh | null = null;
+  private clouds: CloudDeck | null = null;
 
   private viewer = new Vector3();
   private sunDir = new Vector3(1, 0, 0);
@@ -361,6 +363,21 @@ export class Planet implements IPlanet {
 
     this.buildAtmosphere();
     this.buildOcean();
+    this.buildClouds();
+  }
+
+  private buildClouds(): void {
+    const c = makeClouds(this.spec);
+    if (!c) return;
+    this.clouds = c;
+    this.root.add(c.mesh);
+
+    // The terrain reads the same baked field for its shadows, so a dark patch
+    // on the ground is always under the cloud that cast it.
+    const tu = this.terrainUniforms;
+    tu.uCloudTex.value = c.texture;
+    tu.uCloudMidR.value = c.midRadius;
+    tu.uCloudShadow.value = 1;
   }
 
   /* ─────────────────────────── construction ─────────────────────────── */
@@ -387,7 +404,7 @@ export class Planet implements IPlanet {
         uHRayleigh: new Uniform(a.scaleHeightM),
         uHMie: new Uniform(a.scaleHeightM * 0.22),
         uSteps: new Uniform(16),
-        uScatterGain: new Uniform(1.6),
+        uScatterGain: new Uniform(0.38),
       },
       transparent: true,
       depthWrite: false,
@@ -560,6 +577,19 @@ export class Planet implements IPlanet {
     tu.uTime.value = this.time;
     tu.uLodMorph.value.set(this.quad.lodMorph.subarray(0, Math.min(40, this.quad.lodMorph.length)));
 
+    /* ---- clouds ---- */
+    if (this.clouds) {
+      // Skylight bouncing back up into the base of the deck. Without it the
+      // undersides of clouds go pure black at dusk, which reads as a hole.
+      const t = this.spec.atmosphere.present ? this.spec.atmosphere.tint : [0.04, 0.05, 0.07];
+      const sky = Math.max(0, this.sunDir.dot(_d.copy(this.viewer).normalize())) * 0.5 + 0.12;
+      _amb.setRGB(t[0] * sky, t[1] * sky, t[2] * sky).multiplyScalar(this.sunIntensity * 0.5);
+      this.clouds.update(this.viewer, this.sunDir, this.sunColor, this.sunIntensity, _amb, this.time);
+      // Bake before anything draws this frame. The deck is the only thing that
+      // renders to a target mid-update, so it owns the ordering.
+      this.clouds.bake(ctx.renderer, this.time);
+    }
+
     /* ---- atmosphere ---- */
     if (this.atmo) {
       const u = (this.atmo.material as ShaderMaterial).uniforms;
@@ -618,15 +648,27 @@ export class Planet implements IPlanet {
   }
 
   /** Diagnostic: isolate a layer. */
-  setLayerVisible(layer: 'ocean' | 'atmosphere' | 'terrain', v: boolean): void {
+  setLayerVisible(layer: 'ocean' | 'atmosphere' | 'terrain' | 'clouds', v: boolean): void {
     if (layer === 'ocean') {
       if (this.oceanFar) this.oceanFar.visible = v;
       if (this.oceanNear) this.oceanNear.visible = v;
     } else if (layer === 'atmosphere') {
       if (this.atmo) this.atmo.visible = v;
+    } else if (layer === 'clouds') {
+      if (this.clouds) this.clouds.mesh.visible = v;
     } else {
       this.quad.root.visible = v;
     }
+  }
+
+  /**
+   * Weather drives the deck. `cloudiness` is the live 0–1 from the weather
+   * system; it modulates the world's own climatological base rather than
+   * replacing it, so a dry world never turns overcast and a wet one never
+   * turns clear.
+   */
+  setWeather(cloudiness: number): void {
+    this.clouds?.setCover(Math.min(1.15, this.clouds.baseCover * (0.45 + 1.25 * cloudiness)));
   }
 
   setQuality(q: QualityProfile): void {
@@ -638,6 +680,8 @@ export class Planet implements IPlanet {
       pixelError: q.tier === 'ultra' ? 1.5 : q.tier === 'high' ? 2.0 : 3.0,
       maxPatches: q.tier === 'ultra' ? 1400 : q.tier === 'high' ? 900 : 500,
     });
+    this.clouds?.setQuality(q.tier, q.cloudSteps);
+    if (this.clouds) this.terrainUniforms.uCloudTex.value = this.clouds.texture;
     this.terrainMat.flatShading = false;
     this.terrainMat.needsUpdate = true;
   }
@@ -645,6 +689,8 @@ export class Planet implements IPlanet {
   dispose(): void {
     this.quad.dispose();
     this.terrainMat.dispose();
+    this.clouds?.dispose();
+    if (this.clouds) this.root.remove(this.clouds.mesh);
     for (const m of [this.atmo, this.oceanFar, this.oceanNear]) {
       if (!m) continue;
       this.root.remove(m);
@@ -654,9 +700,11 @@ export class Planet implements IPlanet {
     this.atmo = null;
     this.oceanFar = null;
     this.oceanNear = null;
+    this.clouds = null;
   }
 }
 
 const _d = new Vector3();
 const _up = new Vector3();
+const _amb = new Color();
 const _sz = new Vector2();

@@ -181,6 +181,13 @@ export interface IPlanet extends Updatable, Disposable, QualityAware {
   /** Camera position in planet-local metres, called every frame before update. */
   setViewer(localPosition: Vector3): void;
 
+  /**
+   * Live cloud cover, 0–1, from the weather system. The orbital deck and the
+   * ground-level sky are the same phenomenon at two distances and must not
+   * disagree; this is the one channel that keeps them in step.
+   */
+  setWeather(cloudiness: number): void;
+
   /** True once enough terrain exists that the world is safe to stand on. */
   isReady(): boolean;
 

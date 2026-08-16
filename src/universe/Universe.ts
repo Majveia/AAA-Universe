@@ -856,12 +856,19 @@ function makeNebulae(rng: Rng, radiusLy: number, count: number): NebulaSpec[] {
   return out;
 }
 
-export function makeGalaxy(seed: number, position: [number, number, number]): GalaxySpec {
+export function makeGalaxy(
+  seed: number,
+  position: [number, number, number],
+  forceType?: GalaxyType
+): GalaxySpec {
   const rng = new Rng(seed);
-  const type = rng.weighted<GalaxyType>([
+  // The draw always happens, so forcing a type does not shift every subsequent
+  // random number and silently change a galaxy the player has already seen.
+  const drawn = rng.weighted<GalaxyType>([
     ['spiral', 4], ['barred-spiral', 4], ['elliptical', 2],
     ['lenticular', 1], ['irregular', 1.5], ['dwarf', 2], ['ring', 0.4],
   ]);
+  const type = forceType ?? drawn;
 
   const isDisc = type === 'spiral' || type === 'barred-spiral' || type === 'lenticular' || type === 'ring';
   const radiusLy =

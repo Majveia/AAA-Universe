@@ -16,8 +16,9 @@
  *     and none of them alias into the others.
  */
 
-import { Color, MeshStandardMaterial, Texture, Vector2, Vector3 } from 'three';
+import { Color, MeshStandardMaterial, Vector3 } from 'three';
 import { GLSL_COLOR, GLSL_NOISE } from '../core/Noise';
+import { CLOUD_SAMPLE_GLSL } from './Clouds';
 import type { TerrainField } from './TerrainField';
 import type { PlanetSpec } from '../universe/Types';
 
@@ -89,6 +90,10 @@ uniform vec3 uEmissive;
 uniform float uEmissiveStrength;
 uniform float uSeaLevelR;
 uniform float uWetness;
+uniform sampler2D uCloudTex;
+uniform float uCloudMidR;
+uniform float uCloudShadow;
+uniform vec3  uSunDir;
 
 varying vec3  vDir;
 varying float vElev;
@@ -171,6 +176,14 @@ function fragBody(): string {
   rough = mix(rough, 0.55, wet);
   albedo *= mix(1.0, 0.62, wet);
 
+  // Cloud shadow. Solved against the same field the deck renders, so the dark
+  // patch is genuinely under the cloud that made it — and it drifts, which is
+  // most of what sells a sky as moving when you are standing still.
+  if (uCloudShadow > 0.001) {
+    float shade = aeCloudShadow(uCloudTex, vLocal, uSunDir, uCloudMidR);
+    albedo *= mix(1.0, 0.34, shade * uCloudShadow);
+  }
+
   diffuseColor.rgb = albedo;
   roughnessFactor = clamp(rough, 0.05, 1.0);
   metalnessFactor = 0.0;
@@ -239,6 +252,10 @@ export function makeTerrainMaterial(
     uEmissiveStrength: { value: pal.emissiveStrength },
     uSeaLevelR: { value: field.seaLevelRadius() },
     uWetness: { value: spec.ocean.present ? 1 : 0 },
+    // Filled in by Planet once the deck exists; zero means "no clouds here".
+    uCloudTex: { value: null },
+    uCloudMidR: { value: spec.radiusM * 1.001 },
+    uCloudShadow: { value: 0 },
   };
 
   const material = new MeshStandardMaterial({
@@ -260,7 +277,7 @@ export function makeTerrainMaterial(
     shader.fragmentShader = shader.fragmentShader
       .replace(
         '#include <common>',
-        `#include <common>\n${GLSL_NOISE}\n${GLSL_COLOR}\n${fieldGlsl}\n${FRAG_PARS}`
+        `#include <common>\n${GLSL_NOISE}\n${GLSL_COLOR}\n${fieldGlsl}\n${FRAG_PARS}\n${CLOUD_SAMPLE_GLSL}`
       )
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${NORMAL_BODY}`)
       // Must land after <metalnessmap_fragment>, not after <roughnessmap_fragment>:

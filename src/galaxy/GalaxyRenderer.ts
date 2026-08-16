@@ -143,6 +143,16 @@ export class GalaxyRenderer implements IGalaxyRenderer {
     }
   }
 
+  /** Diagnostic: how much of the population has streamed in. */
+  stats(): Record<string, any> {
+    return {
+      grown: this.grown,
+      budget: this.budget,
+      fade: Number(this.fade.toFixed(2)),
+      objects: this.field?.objects.length ?? 0,
+    };
+  }
+
   setTarget(positionLy: Vector3 | null): void {
     this.targetPos = positionLy ? positionLy.clone() : null;
   }

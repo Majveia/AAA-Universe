@@ -264,6 +264,23 @@ async function main() {
         await sleep(1500);
       }
 
+      // The galaxy streams its population in over dozens of frames. In software
+      // that takes far longer than any fixed settle, and a half-grown galaxy
+      // looks like a scattered star cloud rather than a spiral.
+      if (shot.id.startsWith('galaxy')) {
+        await page
+          .waitForFunction(
+            () => {
+              const g = window.__aeon.galaxyDebug?.();
+              return !g || !g.budget || g.grown >= g.budget;
+            },
+            null,
+            { timeout: 240000, polling: 1000 }
+          )
+          .catch(() => {});
+        await sleep(1500);
+      }
+
       // Wait for the frame rate to stabilise so we don't shoot mid-stream-in.
       await page
         .waitForFunction(

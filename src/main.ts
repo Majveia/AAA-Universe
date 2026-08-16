@@ -83,7 +83,11 @@ async function boot(): Promise<void> {
 
   engine.onTransitionProgress = (v) => hud.setVeil(v);
   engine.onRealmChanged = (id) => {
-    hud.setContext(id === 'cosmos' ? 'cosmos' : id === 'galaxy' ? 'map' : id === 'system' ? 'space' : 'foot');
+    // The surface realm spans orbit, flight and foot and sets its own context
+    // as the player descends; overwriting it here put the walking controls on
+    // screen while the camera was still four radii out.
+    if (id === 'surface') return;
+    hud.setContext(id === 'cosmos' ? 'cosmos' : id === 'galaxy' ? 'map' : 'space');
   };
 
   engine.start();
@@ -134,6 +138,7 @@ async function boot(): Promise<void> {
     systemView: (o: any) => system.debugView(o),
     planetView: (o: any) => surface.debugView(o),
     planetDebug: () => surface.debugPlanet(),
+    galaxyDebug: () => galaxy.debugGalaxy(),
     planetLayer: (l: any, v: boolean) => surface.setLayer(l, v),
     plainTerrain: (v: boolean) => surface.setPlainTerrain(v),
     webDebug: (o: any) => cosmos.debugWeb({ ...(o ?? {}), renderer: engine.renderer }),
