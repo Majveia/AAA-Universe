@@ -334,7 +334,7 @@ export class PostFX {
       // red-green-blue confetti, because a one-pixel source separated into
       // three one-pixel sources. Real lateral CA on a good lens is subtle and
       // only shows at the corners of the frame.
-      aberration: this.opts.chromaticAberration ? 0.045 : 0,
+      aberration: this.opts.chromaticAberration ? 0.018 : 0,
     });
 
     this.toneMapping = new ToneMappingEffect({
