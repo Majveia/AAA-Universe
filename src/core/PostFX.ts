@@ -191,7 +191,7 @@ export class FilmEffect extends Effect {
         // what keeps a blue supergiant blue instead of clipping it — but it
         // also drains colour out of anything built from many overlapping
         // additive sprites. This runs after tone mapping and puts it back.
-        ['uSaturation', new Uniform(1.28)],
+        ['uSaturation', new Uniform(1.12)],
         ['uLift', new Uniform(0.02)],
         ['uShadowTint', new Uniform(new Vector3(0.93, 0.97, 1.06))],
         ['uHighlightTint', new Uniform(new Vector3(1.04, 1.0, 0.95))],

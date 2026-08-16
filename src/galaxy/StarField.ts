@@ -239,6 +239,13 @@ export class StarField {
   private rng: Rng;
   private s: StarSample = { x: 0, y: 0, z: 0, r: 1, g: 1, b: 1, lum: 1, pop: 0 };
   private drawFraction = 1;
+  /**
+   * Scalar exposure on top of the physical gain. The surface-brightness law
+   * below is correct but lands in the hundreds for the brightest stars, and
+   * AgX renders that much overshoot as green-yellow before it clips. This is
+   * the photographic stop, not a fudge of the physics.
+   */
+  exposure = 0.15;
 
   constructor(model: GalaxyModel, shared: Record<string, { value: any }>, budget: number) {
     this.model = model;
@@ -480,7 +487,7 @@ export class StarField {
       const s = L.split ? side : 0;
       // Resolved surface brightness is held constant, so the gain has to absorb
       // the current projection scale: see the derivation in the vertex shader.
-      const gain = L.extended ? L.surface : L.surface * (L.coreLy * pixPerRad) * (L.coreLy * pixPerRad);
+      const gain = (L.extended ? L.surface : L.surface * (L.coreLy * pixPerRad) * (L.coreLy * pixPerRad)) * this.exposure;
       for (const mat of [L.matFar, L.matNear]) {
         mat.uniforms.uPixPerRad.value = pixPerRad;
         mat.uniforms.uFade.value = fade;
