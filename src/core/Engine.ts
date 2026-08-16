@@ -221,7 +221,7 @@ export class Engine {
     if (this.postfx) {
       this.postfx.film.grain = this.prefs.filmGrain ? 0.028 : 0;
       this.postfx.film.vignette = this.prefs.vignette ? 0.34 : 0;
-      this.postfx.lens.aberration = this.prefs.chromaticAberration ? 0.55 : 0;
+      this.postfx.lens.aberration = this.prefs.chromaticAberration ? 0.14 : 0;
     }
   }
 

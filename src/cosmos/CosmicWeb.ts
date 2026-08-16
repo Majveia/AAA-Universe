@@ -83,8 +83,13 @@ const BOX_MPC = 300;
 const GRID_COLS = 8;
 function gridSideFor(lattice: number): number {
   // Must stay divisible by GRID_COLS so the Z slices tile into a square atlas.
-  if (lattice <= 24) return 16;
-  if (lattice <= 48) return 32;
+  // Resolution is chosen against the *filament* scale, not the particle count:
+  // a 300 Mpc box on a 32³ grid gives 9.4 Mpc cells, which is wider than the
+  // structures being resolved, so the web smooths into a ball. Finer cells mean
+  // fewer particles each and more shot noise, but the blur that follows is
+  // averaging ~11 neighbours, which covers it.
+  if (lattice <= 24) return 32;
+  if (lattice <= 48) return 64;
   return 64;
 }
 
@@ -150,7 +155,7 @@ export class CosmicWeb implements ICosmicWeb {
   private invModel = new Matrix4();
 
   constructor(seed: number | string = 'AEON-WEB') {
-    this.field = new PrimordialField(seed, { modes: 384 });
+    this.field = new PrimordialField(seed, { modes: 384, boxMpc: BOX_MPC });
     this.root.name = 'CosmicWeb';
     this.root.frustumCulled = false;
   }
@@ -245,14 +250,18 @@ export class CosmicWeb implements ICosmicWeb {
         uGrowthRate: new Uniform(0),
         uHubble: new Uniform(0),
         uDt: new Uniform(0),
-        uForce: new Uniform(0.55),
+        uForce: new Uniform(1.15),
         uGate: new Uniform(1),
         uViscosity: new Uniform(1.4),
         uDecay: new Uniform(1),
         uMaxOffset: new Uniform(BOX_MPC * 0.16),
         uMeanCell: new Uniform(meanCell),
         uHeatDecay: new Uniform(0.985),
-        uHeatGain: new Uniform(2.4),
+        // heat integrates to shock·uDt·gain/(1-decay). At gain 2.4 and decay
+        // 0.985 that equilibrates near 8, so clamp(heat,0,1) pinned to 1 almost
+        // everywhere and the palette collapsed to hot white. Tuned so only
+        // genuine accretion shocks reach the top of the range.
+        uHeatGain: new Uniform(0.30),
       },
     });
 
@@ -334,7 +343,7 @@ export class CosmicWeb implements ICosmicWeb {
         // the sprite's own radius test (r2 > 1 discards) throws away the whole
         // quad on drivers that give a degenerate gl_PointCoord, and the web
         // vanishes despite every draw succeeding.
-        uSize: new Uniform(2.0),
+        uSize: new Uniform(1.8),
         uPixelScale: new Uniform(600),
         uMinSize: new Uniform(3.0),
         uMaxSize: new Uniform(quality.tier === 'ultra' ? 26 : 16),
@@ -345,7 +354,10 @@ export class CosmicWeb implements ICosmicWeb {
         // Calibrated against a working image rather than guessed: 110k additive
         // sprites overlap heavily toward the centre of the volume, so per-sprite
         // radiance has to be low or the core saturates to white.
-        uBrightness: new Uniform(0.10 * Math.min(6, Math.sqrt(262144 / this.particles))),
+        // Calibrated by sweep against a rendered image. Additive sprites
+        // overlap heavily toward the centre of the volume, so per-sprite
+        // radiance stays low and the structure comes from accumulation.
+        uBrightness: new Uniform(0.032 * Math.min(6, Math.sqrt(262144 / this.particles))),
         uDivScale: new Uniform(3.0),
         uHalfBox: new Uniform(BOX_MPC * 0.5),
         uFadeStart: new Uniform(0.82),
@@ -376,7 +388,7 @@ export class CosmicWeb implements ICosmicWeb {
         uBoxHalf: new Uniform(new Vector3(BOX_MPC / 2, BOX_MPC / 2, BOX_MPC / 2)),
         uDisplayScale: new Uniform(1),
         uMeanCell: new Uniform(meanCell),
-        uGain: new Uniform(0.05),
+        uGain: new Uniform(0.002),
         uSteps: new Uniform(quality.tier === 'ultra' ? 64 : quality.tier === 'high' ? 48 : 28),
         uDetail: new Uniform(0.55),
         uDetailFreq: new Uniform(0.06),
@@ -465,7 +477,11 @@ export class CosmicWeb implements ICosmicWeb {
     let a = this.gridA!;
     let b = this.gridB!;
     const skipBlur = this.showGrid === 'splat';
-    for (const stride of skipBlur ? [] : [1, 2]) {
+    // Stride 1 only. The second, wider pass was measured to crush the density
+    // contrast from ~4.8 to ~1.4 — it smooths over roughly a thirteenth of the
+    // box, which is wider than a filament, so the web dissolved into a uniform
+    // ball. The force solve loses some range; uForce compensates.
+    for (const stride of skipBlur ? [] : [1]) {
       for (const axis of AXES) {
         this.blurMat!.uniforms.uSrc.value = textureOf(a, 0);
         (this.blurMat!.uniforms.uAxis.value as Vector3).copy(axis);
@@ -604,6 +620,8 @@ export class CosmicWeb implements ICosmicWeb {
     const n = 256;
     const buf = new Float32Array(4 * n);
     let maxRho = 0;
+    let sumRho = 0;
+    let nRho = 0;
     let maxPos = 0;
     let rows = 0;
     for (let row = 0; row < this.texH; row += Math.max(1, Math.floor(this.texH / 8))) {
@@ -616,12 +634,18 @@ export class CosmicWeb implements ICosmicWeb {
       for (let i = 0; i < n; i++) {
         const w = buf[i * 4 + 3];
         const x = Math.abs(buf[i * 4]);
-        if (Number.isFinite(w) && w > maxRho) maxRho = w;
+        if (Number.isFinite(w)) {
+          if (w > maxRho) maxRho = w;
+          sumRho += w;
+          nRho++;
+        }
         if (Number.isFinite(x) && x > maxPos) maxPos = x;
       }
     }
     return {
-      maxRho: Number(maxRho.toFixed(4)),
+      maxRho: Number(maxRho.toFixed(3)),
+      meanRho: Number((sumRho / Math.max(1, nRho)).toFixed(3)),
+      contrast: Number((maxRho / Math.max(1e-6, sumRho / Math.max(1, nRho))).toFixed(2)),
       maxPos: Number(maxPos.toFixed(2)),
       rows,
       brightness: Number((this.pointsMat?.uniforms.uBrightness.value ?? 0).toFixed(3)),
@@ -636,7 +660,7 @@ export class CosmicWeb implements ICosmicWeb {
     if (g.haze !== undefined && this.hazeMat) this.hazeMat.uniforms.uGain.value = g.haze;
     if (g.composite !== undefined) this.compositeGain = g.composite;
   }
-  private compositeGain = 0.25;
+  private compositeGain = 0.12;
 
   setTimeRate(rate: number): void {
     this.timeRate = Math.max(0, rate);

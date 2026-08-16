@@ -325,7 +325,9 @@ export class PostFX {
     this.lens = new LensEffect({
       intensity: q.tier === 'potato' || q.tier === 'low' ? 0.0 : 0.55,
       streak: 1.0,
-      aberration: this.opts.chromaticAberration ? 0.55 : 0,
+      // A field of small bright points fringes badly: at 0.55 every particle
+      // grew a visible RGB halo. Real lateral CA on a good lens is subtle.
+      aberration: this.opts.chromaticAberration ? 0.14 : 0,
     });
 
     this.toneMapping = new ToneMappingEffect({

@@ -110,10 +110,10 @@ if (ready) {
   // Exposure sweep: the web renders, but the gains were never calibrated
   // against a working image, so find the range by looking at it.
   const SWEEP = [
-    { points: 0.30, haze: 0.30, composite: 0.5, size: 2.6 },
-    { points: 0.10, haze: 0.10, composite: 0.3, size: 2.0 },
-    { points: 0.03, haze: 0.04, composite: 0.2, size: 1.6 },
-    { points: 0.010, haze: 0.015, composite: 0.12, size: 1.4 },
+    { points: 0.10, haze: 0.004, composite: 0.20, size: 2.2 },
+    { points: 0.05, haze: 0.002, composite: 0.12, size: 1.8 },
+    { points: 0.025, haze: 0.001, composite: 0.08, size: 1.6 },
+    { points: 0.012, haze: 0.0005, composite: 0.05, size: 1.5 },
   ];
   for (let i = 0; i < SWEEP.length; i++) {
     await page.evaluate((g) => window.__aeon.webDebug?.({ gains: g }), SWEEP[i]);
