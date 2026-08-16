@@ -107,6 +107,20 @@ if (ready) {
   console.log('wrote captures/diag-nopost.png');
   await page.evaluate(() => window.__aeon.setPost?.(true));
   await sleep(1500);
+  // Exposure sweep: the web renders, but the gains were never calibrated
+  // against a working image, so find the range by looking at it.
+  const SWEEP = [
+    { points: 0.30, haze: 0.30, composite: 0.5, size: 2.6 },
+    { points: 0.10, haze: 0.10, composite: 0.3, size: 2.0 },
+    { points: 0.03, haze: 0.04, composite: 0.2, size: 1.6 },
+    { points: 0.010, haze: 0.015, composite: 0.12, size: 1.4 },
+  ];
+  for (let i = 0; i < SWEEP.length; i++) {
+    await page.evaluate((g) => window.__aeon.webDebug?.({ gains: g }), SWEEP[i]);
+    await sleep(2500);
+    await page.screenshot({ path: `captures/sweep-${i}.png` });
+    console.log(`wrote captures/sweep-${i}.png`, JSON.stringify(SWEEP[i]));
+  }
   const camInfo = await page.evaluate(() => window.__aeon.debugBox?.(true));
   console.log('camera:', JSON.stringify(camInfo));
   await sleep(3000);

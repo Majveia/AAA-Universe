@@ -244,6 +244,7 @@ export class CosmosRealm implements Realm {
     if (!w) return { built: false };
     if (opts.showGrid !== undefined) w.showGrid = opts.showGrid;
     if (opts.flat !== undefined) w.setFlat?.(opts.flat);
+    if (opts.gains) w.setGains?.(opts.gains);
     return { showGrid: w.showGrid, diag: w.diag, rho: w.probeRho?.(opts.renderer) };
   }
 

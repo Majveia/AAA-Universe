@@ -334,7 +334,7 @@ export class CosmicWeb implements ICosmicWeb {
         // the sprite's own radius test (r2 > 1 discards) throws away the whole
         // quad on drivers that give a degenerate gl_PointCoord, and the web
         // vanishes despite every draw succeeding.
-        uSize: new Uniform(2.6),
+        uSize: new Uniform(2.0),
         uPixelScale: new Uniform(600),
         uMinSize: new Uniform(3.0),
         uMaxSize: new Uniform(quality.tier === 'ultra' ? 26 : 16),
@@ -342,7 +342,10 @@ export class CosmicWeb implements ICosmicWeb {
         // particles are individually heavier and must be individually brighter
         // or the whole web dims as quality drops. Square-root keeps it from
         // overshooting into a blown-out smear at the very low counts.
-        uBrightness: new Uniform(Math.min(6, Math.sqrt(262144 / this.particles))),
+        // Calibrated against a working image rather than guessed: 110k additive
+        // sprites overlap heavily toward the centre of the volume, so per-sprite
+        // radiance has to be low or the core saturates to white.
+        uBrightness: new Uniform(0.10 * Math.min(6, Math.sqrt(262144 / this.particles))),
         uDivScale: new Uniform(3.0),
         uHalfBox: new Uniform(BOX_MPC * 0.5),
         uFadeStart: new Uniform(0.82),
@@ -373,7 +376,7 @@ export class CosmicWeb implements ICosmicWeb {
         uBoxHalf: new Uniform(new Vector3(BOX_MPC / 2, BOX_MPC / 2, BOX_MPC / 2)),
         uDisplayScale: new Uniform(1),
         uMeanCell: new Uniform(meanCell),
-        uGain: new Uniform(1.0),
+        uGain: new Uniform(0.05),
         uSteps: new Uniform(quality.tier === 'ultra' ? 64 : quality.tier === 'high' ? 48 : 28),
         uDetail: new Uniform(0.55),
         uDetailFreq: new Uniform(0.06),
@@ -506,7 +509,7 @@ export class CosmicWeb implements ICosmicWeb {
     h.uGridTex.value = density;
     (h.uCamPos.value as Vector3).setFromMatrixPosition(cam.matrixWorld);
     h.uTime.value = this.elapsed;
-    h.uGain.value = 1.0;
+    // haze gain is owned by setGains; do not stomp it each frame
     this.quad.run(renderer, this.hazeMat!, this.hazeTarget!);
     if (this.showGrid) {
       this.compositeMat!.uniforms.uHaze.value = density;
@@ -515,7 +518,7 @@ export class CosmicWeb implements ICosmicWeb {
       this.compositeMat!.uniforms.uGain.value = 0.35;
     } else {
       this.compositeMat!.uniforms.uHaze.value = textureOf(this.hazeTarget!, 0);
-      this.compositeMat!.uniforms.uGain.value = 1.0;
+      this.compositeMat!.uniforms.uGain.value = this.compositeGain;
     }
 
     /* ---- 5. the visible particles ---- */
@@ -625,6 +628,15 @@ export class CosmicWeb implements ICosmicWeb {
       pixelScale: Number((this.pointsMat?.uniforms.uPixelScale.value ?? 0).toFixed(1)),
     };
   }
+
+  /** Runtime exposure knobs, so the look can be tuned without a rebuild. */
+  setGains(g: { points?: number; haze?: number; composite?: number; size?: number }): void {
+    if (g.points !== undefined && this.pointsMat) this.pointsMat.uniforms.uBrightness.value = g.points;
+    if (g.size !== undefined && this.pointsMat) this.pointsMat.uniforms.uSize.value = g.size;
+    if (g.haze !== undefined && this.hazeMat) this.hazeMat.uniforms.uGain.value = g.haze;
+    if (g.composite !== undefined) this.compositeGain = g.composite;
+  }
+  private compositeGain = 0.25;
 
   setTimeRate(rate: number): void {
     this.timeRate = Math.max(0, rate);
