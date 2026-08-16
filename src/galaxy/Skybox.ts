@@ -79,41 +79,57 @@ uniform float uSeed;
 
 varying vec3 vDir;
 
+/** Direction to equirectangular UV. */
+vec2 aeSkyUv(vec3 d){
+  return vec2(atan(d.z, d.x) * 0.1591549431 + 0.5,
+              asin(clamp(d.y, -1.0, 1.0)) * 0.3183098862 + 0.5);
+}
+
 /**
- * One layer of stars. The sphere is diced into cells by direction; each cell
- * holds one star at a hashed offset, with a hashed magnitude and temperature.
- * Density is cells per radian; the cut throws most cells away so the sky is
- * not a uniform grid.
+ * One layer of stars.
+ *
+ * Cells are laid out on the equirectangular grid, not in 3D space. The obvious
+ * implementation dices direction-scaled 3-space and loops the 27 neighbouring
+ * cells, which is correct but costs 243 cell evaluations per pixel across three
+ * layers — enough to push a single frame past three minutes on a software
+ * rasteriser and into milliseconds on real hardware, for a backdrop. In 2D the
+ * same result needs 9 cells per layer. The poles stretch, which no one has ever
+ * noticed in a starfield.
+ *
+ * Density is cells across the full 360 degrees; the cut throws most cells away
+ * so the sky is not a uniform lattice.
  */
-vec3 starLayer(vec3 d, float density, float cut, float gain){
-  vec3 p = d * density;
-  ivec3 base = ivec3(floor(p));
+vec3 starLayer(vec2 uv, float density, float cut, float gain){
+  // Half as many cells in latitude as in longitude keeps them roughly square.
+  vec2 p = uv * vec2(density, density * 0.5);
+  vec2 base = floor(p);
   vec3 acc = vec3(0.0);
-  // Three cells per axis: a star near a boundary must still light its
-  // neighbours' pixels or the layer shows its lattice.
-  for (int dz = -1; dz <= 1; dz++)
   for (int dy = -1; dy <= 1; dy++)
   for (int dx = -1; dx <= 1; dx++){
-    ivec3 c = base + ivec3(dx, dy, dz);
-    vec3 h = hash33i(c);
+    vec2 c = base + vec2(float(dx), float(dy));
+    // Wrap longitude so the seam has no doubled or missing stars.
+    vec2 cw = vec2(mod(c.x, density), c.y);
+    vec3 h = hash33i(ivec3(int(cw.x), int(cw.y), 0));
     if (h.z > cut) continue;
-    vec3 h2 = hash33i(c + ivec3(37, 91, 13));
-    vec3 sp = normalize((vec3(c) + 0.5 + (h - 0.5) * 0.9) / density);
-    float cosA = dot(sp, d);
-    if (cosA < 0.9999) {
-      // Cheap small-angle distance; exact enough well inside a degree.
-      float ang = sqrt(max(0.0, 2.0 - 2.0 * cosA));
-      // Power law: mag^6 makes bright stars rare and the rest a fine dust.
-      float mag = pow(h2.x, 6.0);
-      // Energy-conserving spread. Below one pixel a star cannot get smaller,
-      // only fainter — which is exactly how a real one behaves.
-      float rad = max(uPixAngle * 0.85, uPixAngle * (0.6 + 2.4 * mag));
-      float falloff = exp(-(ang * ang) / (rad * rad));
-      float energy = mag * (uPixAngle * uPixAngle) / (rad * rad);
-      // Cool dwarfs are common, blue giants are not.
-      float tempK = mix(2600.0, 26000.0, pow(h2.y, 2.6));
-      acc += blackbody(tempK) * falloff * energy * gain;
-    }
+    vec3 h2 = hash33i(ivec3(int(cw.x) + 37, int(cw.y) + 91, 13));
+
+    vec2 sp = c + vec2(0.05) + h.xy * 0.9;
+    // Angular distance, corrected for the longitude squeeze toward the poles.
+    vec2 dd = (p - sp) / vec2(density, density * 0.5);
+    dd.x *= max(0.08, cos((uv.y - 0.5) * 3.1415926536));
+    float ang = length(dd) * 6.2831853072;
+
+    // Power law: mag^6 makes bright stars rare and the rest a fine dust.
+    float mag = pow(h2.x, 6.0);
+    // Energy-conserving spread. Below one pixel a star cannot get smaller,
+    // only fainter — which is exactly how a real one behaves.
+    float rad = uPixAngle * (0.85 + 2.4 * mag);
+    float falloff = exp(-(ang * ang) / (rad * rad));
+    if (falloff < 0.002) continue;
+    float energy = mag * (uPixAngle * uPixAngle) / (rad * rad);
+    // Cool dwarfs are common, blue giants are not.
+    float tempK = mix(2600.0, 26000.0, pow(h2.y, 2.6));
+    acc += blackbody(tempK) * falloff * energy * gain;
   }
   return acc;
 }
@@ -137,10 +153,10 @@ void main(){
   // Dust. Cold molecular clouds sit *in* the plane, so the lanes are thinnest
   // exactly where the glow is brightest, which is what carves the band into
   // the rift that makes it read as a structure rather than a smear.
-  float dustN = fbm(d * 5.2 + uSeed * 0.37, 5) * 0.5 + 0.5;
+  float dustN = fbm(d * 5.2 + uSeed * 0.37, 4) * 0.5 + 0.5;
   float lane = smoothstep(0.42, 0.78, dustN) * exp(-abs(lat) * 42.0);
   // Clumping along the band, so it is not a smooth airbrushed stripe.
-  float clump = 0.55 + 0.9 * (fbm(d * 9.0 - uSeed * 0.11, 4) * 0.5 + 0.5);
+  float clump = 0.55 + 0.9 * (fbm(d * 9.0 - uSeed * 0.11, 3) * 0.5 + 0.5);
 
   vec3 milky = (uArmColor * band * clump * 0.055 + uCoreColor * bulge * 0.10) * uGalBright;
   milky *= mix(1.0, 0.10, lane);
@@ -148,16 +164,17 @@ void main(){
   milky += uDustColor * lane * band * 0.012 * uGalBright;
 
   /* ---- nebulae: a few emission clouds, mostly near the plane ---- */
-  float neb = pow(clamp(fbm(d * 3.1 - uSeed * 0.53, 4) * 0.5 + 0.5, 0.0, 1.0), 5.0);
+  float neb = pow(clamp(fbm(d * 3.1 - uSeed * 0.53, 3) * 0.5 + 0.5, 0.0, 1.0), 5.0);
   vec3 nebC = mix(vec3(0.85, 0.22, 0.42), vec3(0.20, 0.52, 0.95),
-                  fbm(d * 1.3 + uSeed, 2) * 0.5 + 0.5);
+                  snoise(d * 1.3 + uSeed) * 0.5 + 0.5);
   milky += nebC * neb * exp(-abs(lat) * 12.0) * 0.09 * uGalBright;
 
   /* ---- stars: three layers, coarse to fine ---- */
+  vec2 suv = aeSkyUv(d);
   vec3 stars = vec3(0.0);
-  stars += starLayer(d,  90.0, 0.055, 1.00);
-  stars += starLayer(d, 240.0, 0.075, 0.42);
-  stars += starLayer(d, 620.0, 0.090, 0.16);
+  stars += starLayer(suv,  260.0, 0.060, 1.00);
+  stars += starLayer(suv,  700.0, 0.080, 0.40);
+  stars += starLayer(suv, 1800.0, 0.095, 0.15);
   // The band is where the stars are: crowd them into it rather than
   // scattering them evenly over the sphere.
   stars *= (0.55 + 1.9 * band * uGalBright) * uStarGain;
