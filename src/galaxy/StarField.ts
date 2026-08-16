@@ -26,7 +26,6 @@ import {
   AdditiveBlending,
   BufferAttribute,
   BufferGeometry,
-  GLSL3,
   Points,
   ShaderMaterial,
   Sphere,
@@ -273,7 +272,10 @@ export class StarField {
       depthWrite: false,
       depthTest: true,
       blending: AdditiveBlending,
-      glslVersion: GLSL3,
+      // No GLSL3 here. three only omits its gl_FragColor compatibility define
+      // when glslVersion is set explicitly to and these shaders are
+      // written against GLSL1 (gl_FragColor, varying) with no 3.0-only
+      // features — so declaring 3.0 just breaks them.
     });
   }
 

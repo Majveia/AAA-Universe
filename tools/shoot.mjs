@@ -24,8 +24,10 @@ function arg(name, def) {
   return i >= 0 && args[i + 1] ? args[i + 1] : def;
 }
 const OUT = arg('out', 'captures');
-const WIDTH = parseInt(arg('width', '1920'), 10);
-const HEIGHT = parseInt(arg('height', '1080'), 10);
+// Default to 720p: this harness runs against a software rasteriser, and at
+// 1080p a single frame takes longer than Playwright's screenshot timeout.
+const WIDTH = parseInt(arg('width', '1280'), 10);
+const HEIGHT = parseInt(arg('height', '720'), 10);
 const PORT = parseInt(arg('port', '5199'), 10);
 const ONLY = arg('shots', '').split(',').filter(Boolean);
 const KEEP = args.includes('--keep');
@@ -248,7 +250,7 @@ async function main() {
         .catch(() => {});
 
       const file = path.join(OUT, `${shot.id}.png`);
-      await page.screenshot({ path: file, type: 'png' });
+      await page.screenshot({ path: file, type: 'png', timeout: 180000 });
       const stats = await page.evaluate(() => window.__aeon.stats());
       manifest.push({ id: shot.id, title: shot.title, file, stats });
       console.log(`ok  (${stats.fps.toFixed(0)} fps, ${stats.drawCalls} draws)`);
