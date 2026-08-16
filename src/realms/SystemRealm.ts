@@ -28,6 +28,7 @@ import {
   MathUtils,
   Points,
   PointsMaterial,
+  Vector2,
   Scene,
   Vector3,
 } from 'three';
@@ -210,7 +211,9 @@ export class SystemRealm implements Realm {
     /* ---- star ---- */
     const starLocal = this.toLocal(new Vector3(0, 0, 0), new Vector3());
     this.star.root.position.copy(starLocal);
-    this.star.update(dt, this.camera.position);
+    const size = ctx.renderer.getDrawingBufferSize(_sz);
+    const pixPerRad = size.y * 0.5 / Math.tan((this.camera.fov * Math.PI) / 360);
+    this.star.update(dt, this.camera.position, pixPerRad);
 
     /* ---- HUD ---- */
     const hud = ctx.services.hud;
@@ -381,6 +384,7 @@ export class SystemRealm implements Realm {
 }
 
 const _tmpA = new Vector3();
+const _sz = new Vector2();
 
 function describeStar(s: StarSystemSpec): string {
   const st = s.stars[0];

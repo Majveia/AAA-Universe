@@ -16,6 +16,8 @@
 
 import {
   AdditiveBlending,
+  BufferAttribute,
+  BufferGeometry,
   BackSide,
   Color,
   DoubleSide,
@@ -23,6 +25,7 @@ import {
   Mesh,
   Object3D,
   PlaneGeometry,
+  Points,
   RingGeometry,
   ShaderMaterial,
   SphereGeometry,
@@ -81,7 +84,7 @@ void main(){
   // exactly what the F2-F1 form of worley noise gives you.
   vec2 wl = worley(p / max(uGranulation, 1e-4), 1.0);
   float lanes = smoothstep(0.0, 0.35, wl.y - wl.x);
-  vec2 wl2 = worley(p / (uGranulation * 5.0) + vec2(uTime * 0.02).xxy.xy, 1.0);
+  vec2 wl2 = worley(p / (uGranulation * 5.0) + vec3(0.0, uTime * 0.02, 0.0), 1.0);
   float superg = smoothstep(0.0, 0.5, wl2.y - wl2.x);
 
   float turb = fbm(p * 24.0 + vec3(0.0, uTime * 0.09, 0.0), 5) * 0.5 + 0.5;
@@ -238,11 +241,71 @@ void main(){
 }
 `;
 
+
+/**
+ * The glow sprite.
+ *
+ * A star's photosphere is a sphere of the correct physical radius, which at
+ * interplanetary distance is a fraction of a pixel and disappears entirely —
+ * the star system renders empty even though everything in it is correct. Real
+ * point sources do not vanish; they bloom. This is a screen-space sprite with
+ * a floor on its size, carrying the star's colour and an inverse-square
+ * intensity, so the star reads from anywhere in the system.
+ */
+const GLOW_VERT = /* glsl */ `
+#include <common>
+#include <logdepthbuf_pars_vertex>
+uniform float uPixPerRad;
+uniform float uRadius;
+uniform float uMinPx;
+uniform float uMaxPx;
+uniform float uLum;
+uniform float uExposure;
+varying float vI;
+void main(){
+  vec4 mv = modelViewMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+  gl_Position = projectionMatrix * mv;
+  float dist = max(-mv.z, 1.0);
+  // True angular size in pixels, then a floor so it never falls below the
+  // resolution of the screen and blinks out.
+  float truePx = (uRadius / dist) * uPixPerRad * 2.0;
+  float drawn = clamp(truePx * 6.0, uMinPx, uMaxPx);
+  gl_PointSize = drawn;
+  // Apparent flux, in solar-per-AU-squared. Working in raw SI here gives
+  // numbers around 1e-18 and the star silently disappears; normalising to
+  // astronomical units keeps it in a range the tone curve can actually see.
+  float au = dist / 1.495978707e11;
+  float flux = uLum / max(1e-8, au * au);
+  // Spread that flux over the pixels actually drawn, so widening the sprite
+  // dims it per-pixel instead of adding energy.
+  vI = flux * uExposure / max(1.0, drawn * drawn);
+  #include <logdepthbuf_vertex>
+}
+`;
+
+const GLOW_FRAG = /* glsl */ `
+#include <common>
+#include <logdepthbuf_pars_fragment>
+uniform vec3 uColor;
+varying float vI;
+void main(){
+  #include <logdepthbuf_fragment>
+  vec2 d = gl_PointCoord - 0.5;
+  float r2 = dot(d, d) * 4.0;
+  if (r2 > 1.0) discard;
+  // Tight core in a broad skirt: what makes a point source read as bright
+  // rather than merely large.
+  float a = exp(-r2 * 6.0) + 0.22 * exp(-r2 * 1.2);
+  gl_FragColor = vec4(uColor * (vI * a), 1.0);
+}
+`;
+
 export class StarRenderer {
   readonly root = new Object3D();
   private photosphere: Mesh | null = null;
   private corona: Mesh | null = null;
   private disc: Mesh | null = null;
+  private glow: Points | null = null;
   private spec: StarSpec | null = null;
   private time = 0;
   private uniforms: Record<string, Uniform<any>> = {};
@@ -332,6 +395,34 @@ export class StarRenderer {
       this.root.add(this.disc);
     }
 
+    // Always-visible glow, even for a black hole's accretion light.
+    {
+      const g = new BufferGeometry();
+      g.setAttribute('position', new BufferAttribute(new Float32Array(3), 3));
+      const lum = isBH ? Math.pow(Math.max(1, acc) / 1e30, 0.2) * 0.4 : Math.pow(Math.max(1e-5, lsol), 0.42);
+      const mat = new ShaderMaterial({
+        vertexShader: GLOW_VERT,
+        fragmentShader: GLOW_FRAG,
+        uniforms: {
+          uPixPerRad: new Uniform(540),
+          uRadius: new Uniform(Math.max(r, 1)),
+          uMinPx: new Uniform(6),
+          uMaxPx: new Uniform(160),
+          uLum: new Uniform(lum),
+          uExposure: new Uniform(2600),
+          uColor: new Uniform(new Color(...(isBH ? [1.0, 0.72, 0.42] : spec.color))),
+        },
+        transparent: true,
+        depthWrite: false,
+        blending: AdditiveBlending,
+        toneMapped: false,
+      });
+      this.glow = new Points(g, mat);
+      this.glow.frustumCulled = false;
+      this.glow.renderOrder = 20;
+      this.root.add(this.glow);
+    }
+
     if (isBH) {
       // The hole itself: an absolutely black sphere at the photon sphere. It
       // needs to write depth so the disc behind it is genuinely occluded.
@@ -355,8 +446,11 @@ export class StarRenderer {
     }
   }
 
-  update(dt: number, cameraWorldPos: Vector3): void {
+  update(dt: number, cameraWorldPos: Vector3, pixPerRad = 540): void {
     if (!this.spec) return;
+    if (this.glow) {
+      (this.glow.material as ShaderMaterial).uniforms.uPixPerRad.value = pixPerRad;
+    }
     this.time += dt;
     const spin = this.spec.rotationS > 0 ? (this.time / this.spec.rotationS) * Math.PI * 2 : 0;
 
@@ -379,7 +473,7 @@ export class StarRenderer {
   }
 
   dispose(): void {
-    for (const m of [this.photosphere, this.corona, this.disc]) {
+    for (const m of [this.photosphere, this.corona, this.disc, this.glow as any]) {
       if (!m) continue;
       this.root.remove(m);
       m.geometry.dispose();
@@ -388,5 +482,6 @@ export class StarRenderer {
     this.photosphere = null;
     this.corona = null;
     this.disc = null;
+    this.glow = null;
   }
 }
