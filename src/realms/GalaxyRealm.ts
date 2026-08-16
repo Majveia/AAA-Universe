@@ -74,7 +74,7 @@ export class GalaxyRealm implements Realm {
     this.candidates = [];
     const home = universe.findHomeSystem();
     this.candidates.push(home);
-    for (const s of universe.systemsNear(home.position[0], home.position[1], home.position[2], 120)) {
+    for (const s of universe.systemsNear(home.position[0], home.position[1], home.position[2], 120, 700)) {
       if (s.notable && this.candidates.length < 12) this.candidates.push(s);
     }
     this.target = this.candidates[0] ?? null;

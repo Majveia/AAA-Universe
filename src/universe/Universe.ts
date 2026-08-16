@@ -964,7 +964,24 @@ export class Universe {
   }
 
   /** All systems whose cells intersect a sphere, for local starfield rendering. */
-  systemsNear(cx: number, cy: number, cz: number, radiusLy: number): StarSystemSpec[] {
+  /**
+   * Systems within a radius, nearest shells first.
+   *
+   * The cell lattice is 6.5 ly on a side, so the cell count goes as the cube of
+   * the radius: a 120 ly ball is sixty thousand cells and every occupied one
+   * generates a complete system — stars, planets, terrain parameters, palettes,
+   * moons, civilizations. Done eagerly that is tens of seconds of blocked main
+   * thread on entering the star map. Walking outward in Chebyshev shells and
+   * stopping at `limit` gives the caller the nearest systems, which is what
+   * every caller actually wants, for a fraction of the work.
+   */
+  systemsNear(
+    cx: number,
+    cy: number,
+    cz: number,
+    radiusLy: number,
+    limit = 512
+  ): StarSystemSpec[] {
     const c = Universe.CELL_LY;
     const r = Math.ceil(radiusLy / c);
     const bx = Math.floor(cx / c);
@@ -972,15 +989,35 @@ export class Universe {
     const bz = Math.floor(cz / c);
     const out: StarSystemSpec[] = [];
     const r2 = radiusLy * radiusLy;
-    for (let dz = -r; dz <= r; dz++) {
-      for (let dy = -r; dy <= r; dy++) {
-        for (let dx = -r; dx <= r; dx++) {
-          const s = this.systemAt(bx + dx, by + dy, bz + dz);
-          if (!s) continue;
-          const ex = s.position[0] - cx;
-          const ey = s.position[1] - cy;
-          const ez = s.position[2] - cz;
-          if (ex * ex + ey * ey + ez * ez <= r2) out.push(s);
+
+    const take = (dx: number, dy: number, dz: number): boolean => {
+      const s = this.systemAt(bx + dx, by + dy, bz + dz);
+      if (!s) return false;
+      const ex = s.position[0] - cx;
+      const ey = s.position[1] - cy;
+      const ez = s.position[2] - cz;
+      if (ex * ex + ey * ey + ez * ez > r2) return false;
+      out.push(s);
+      return out.length >= limit;
+    };
+
+    for (let k = 0; k <= r; k++) {
+      // The surface of a Chebyshev shell: every cell with max(|dx|,|dy|,|dz|) = k.
+      for (let dz = -k; dz <= k; dz++) {
+        const edgeZ = Math.abs(dz) === k;
+        for (let dy = -k; dy <= k; dy++) {
+          const edgeY = Math.abs(dy) === k;
+          if (edgeZ || edgeY) {
+            for (let dx = -k; dx <= k; dx++) if (take(dx, dy, dz)) return out;
+          } else {
+            // Interior of this slice: only the two faces at |dx| = k are new.
+            if (k === 0) {
+              if (take(0, dy, dz)) return out;
+            } else {
+              if (take(-k, dy, dz)) return out;
+              if (take(k, dy, dz)) return out;
+            }
+          }
         }
       }
     }

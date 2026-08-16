@@ -116,7 +116,7 @@ export class SurfaceRealm implements Realm {
         // Some systems are all gas. Rather than drop the player onto a world
         // with no surface, look outward until we find one worth standing on.
         const near = universe.systemsNear(
-          system.position[0], system.position[1], system.position[2], 260
+          system.position[0], system.position[1], system.position[2], 260, 240
         ) as StarSystemSpec[];
         near.sort((a: StarSystemSpec, b: StarSystemSpec) => (b.notable ? 1 : 0) - (a.notable ? 1 : 0));
         for (const s of near) {
