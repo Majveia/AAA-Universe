@@ -31,8 +31,20 @@ import type { GalaxySpec, StarSystemSpec } from '../universe/Types';
 import type { QualityProfile } from '../core/Settings';
 import { GalaxyModel } from './GalaxyModel';
 import { StarField } from './StarField';
+import { GalaxyVolume } from './GalaxyVolume';
 
 /** Stars actually drawn, per tier. The real count is ~10¹¹; we suggest it. */
+/** Raymarch steps through the disc. Below about twelve it bands visibly. */
+function volumeSteps(q: QualityProfile | null): number {
+  switch (q?.tier) {
+    case 'ultra': return 40;
+    case 'high': return 30;
+    case 'medium': return 22;
+    case 'low': return 16;
+    default: return 12;
+  }
+}
+
 function budgetFor(q: QualityProfile | null): number {
   if (!q) return 300000;
   switch (q.tier) {
@@ -49,6 +61,7 @@ export class GalaxyRenderer implements IGalaxyRenderer {
 
   private model: GalaxyModel | null = null;
   private field: StarField | null = null;
+  private volume: GalaxyVolume | null = null;
   private shared: Record<string, { value: any }> = {};
   private spec: GalaxySpec | null = null;
   private quality: QualityProfile | null = null;
@@ -70,6 +83,12 @@ export class GalaxyRenderer implements IGalaxyRenderer {
     this.budget = budgetFor(this.quality);
     this.field = new StarField(this.model, this.shared, this.budget);
     for (const o of this.field.objects) this.root.add(o);
+
+    // The diffuse body. Without it a galaxy is a scatter of resolved points,
+    // which is not what a galaxy looks like from anywhere you can see one whole.
+    this.volume = new GalaxyVolume(this.model);
+    this.volume.setSteps(volumeSteps(this.quality));
+    this.root.add(this.volume.mesh);
     this.grown = 0;
     this.fade = 0;
     // Orient the disc so its normal matches the spec — every galaxy hangs at
@@ -104,6 +123,7 @@ export class GalaxyRenderer implements IGalaxyRenderer {
     this.galTime += dt * 0.0009;
     this.shared.uGalTime.value = this.galTime;
     this.shared.uPattern.value = this.model.patternOmega * this.galTime;
+    this.volume?.setPattern(this.model.patternOmega * this.galTime);
 
     // Stream the population in over the first couple of seconds.
     if (this.grown < this.budget) {
@@ -172,9 +192,15 @@ export class GalaxyRenderer implements IGalaxyRenderer {
     } else if (this.field) {
       this.field.setDrawFraction(Math.min(1, want / Math.max(1, this.budget)));
     }
+    this.volume?.setSteps(volumeSteps(q));
   }
 
   private teardown(): void {
+    if (this.volume) {
+      this.root.remove(this.volume.mesh);
+      this.volume.dispose();
+      this.volume = null;
+    }
     if (this.field) {
       for (const o of this.field.objects) this.root.remove(o);
       this.field.dispose();

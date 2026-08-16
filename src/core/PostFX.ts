@@ -329,9 +329,12 @@ export class PostFX {
     this.lens = new LensEffect({
       intensity: q.tier === 'potato' || q.tier === 'low' ? 0.0 : 0.55,
       streak: 1.0,
-      // A field of small bright points fringes badly: at 0.55 every particle
-      // grew a visible RGB halo. Real lateral CA on a good lens is subtle.
-      aberration: this.opts.chromaticAberration ? 0.14 : 0,
+      // A field of small bright points fringes badly. At 0.55 every particle
+      // grew a visible RGB halo; at 0.14 a galaxy's stars still came out as
+      // red-green-blue confetti, because a one-pixel source separated into
+      // three one-pixel sources. Real lateral CA on a good lens is subtle and
+      // only shows at the corners of the frame.
+      aberration: this.opts.chromaticAberration ? 0.045 : 0,
     });
 
     this.toneMapping = new ToneMappingEffect({
