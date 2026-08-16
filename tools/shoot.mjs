@@ -30,6 +30,10 @@ const PORT = parseInt(arg('port', '5199'), 10);
 const ONLY = arg('shots', '').split(',').filter(Boolean);
 const KEEP = args.includes('--keep');
 const SETTLE = parseInt(arg('settle', '2500'), 10);
+// Headless here means SwiftShader — a software rasteriser. 'ultra' is the right
+// tier to judge on real hardware but never finishes a frame in software, so the
+// tier is a flag with a tractable default.
+const TIER = arg('tier', 'medium');
 
 /**
  * The shot list. Each entry drives the running game into a specific state and
@@ -41,7 +45,7 @@ const SHOTS = [
     title: 'Cosmic web — present epoch, wide',
     setup: async (a) => {
       await a.setRealm('cosmos');
-      a.cosmosView?.({ epoch: 1.0, distance: 340, pitch: 0.35, yaw: 0.6 });
+      await a.cosmosView?.({ epoch: 1.0, distance: 340, pitch: 0.35, yaw: 0.6 });
     },
     settle: 4000,
   },
@@ -50,7 +54,7 @@ const SHOTS = [
     title: 'Cosmic web — structure formation, z≈8',
     setup: async (a) => {
       await a.setRealm('cosmos');
-      a.cosmosView?.({ epoch: 0.11, distance: 240, pitch: 0.2, yaw: 2.1 });
+      await a.cosmosView?.({ epoch: 0.11, distance: 240, pitch: 0.2, yaw: 2.1 });
     },
     settle: 4000,
   },
@@ -59,7 +63,7 @@ const SHOTS = [
     title: 'Cosmic web — inside a filament',
     setup: async (a) => {
       await a.setRealm('cosmos');
-      a.cosmosView?.({ epoch: 1.0, distance: 55, pitch: 0.05, yaw: 1.2 });
+      await a.cosmosView?.({ epoch: 1.0, distance: 55, pitch: 0.05, yaw: 1.2 });
     },
     settle: 4000,
   },
@@ -68,7 +72,7 @@ const SHOTS = [
     title: 'Galaxy — face on',
     setup: async (a) => {
       await a.setRealm('galaxy');
-      a.galaxyView?.({ distance: 95000, pitch: 1.15, yaw: 0.4 });
+      await a.galaxyView?.({ distance: 95000, pitch: 1.15, yaw: 0.4 });
     },
     settle: 4500,
   },
@@ -77,7 +81,7 @@ const SHOTS = [
     title: 'Galaxy — edge on, dust lanes',
     setup: async (a) => {
       await a.setRealm('galaxy');
-      a.galaxyView?.({ distance: 78000, pitch: 0.06, yaw: 1.9 });
+      await a.galaxyView?.({ distance: 78000, pitch: 0.06, yaw: 1.9 });
     },
     settle: 4500,
   },
@@ -86,7 +90,7 @@ const SHOTS = [
     title: 'Star system — inner planets and the star',
     setup: async (a) => {
       await a.setRealm('system');
-      a.systemView?.({ mode: 'wide' });
+      await a.systemView?.({ mode: 'wide' });
     },
     settle: 5000,
   },
@@ -95,7 +99,7 @@ const SHOTS = [
     title: 'Planet from orbit — terminator and atmosphere',
     setup: async (a) => {
       await a.setRealm('surface');
-      a.planetView?.({ mode: 'orbit' });
+      await a.planetView?.({ mode: 'orbit' });
     },
     settle: 8000,
   },
@@ -104,7 +108,7 @@ const SHOTS = [
     title: 'Planet limb — atmospheric scattering against space',
     setup: async (a) => {
       await a.setRealm('surface');
-      a.planetView?.({ mode: 'limb' });
+      await a.planetView?.({ mode: 'limb' });
     },
     settle: 8000,
   },
@@ -113,7 +117,7 @@ const SHOTS = [
     title: 'Surface — landscape vista, third person',
     setup: async (a) => {
       await a.setRealm('surface');
-      a.planetView?.({ mode: 'vista' });
+      await a.planetView?.({ mode: 'vista' });
     },
     settle: 10000,
   },
@@ -122,7 +126,7 @@ const SHOTS = [
     title: 'Surface — first person, ground detail',
     setup: async (a) => {
       await a.setRealm('surface');
-      a.planetView?.({ mode: 'ground' });
+      await a.planetView?.({ mode: 'ground' });
     },
     settle: 10000,
   },
@@ -131,7 +135,7 @@ const SHOTS = [
     title: 'Surface — settlement at dusk',
     setup: async (a) => {
       await a.setRealm('surface');
-      a.planetView?.({ mode: 'city' });
+      await a.planetView?.({ mode: 'city' });
     },
     settle: 12000,
   },
@@ -140,7 +144,7 @@ const SHOTS = [
     title: 'Surface — night, aurora and bioluminescence',
     setup: async (a) => {
       await a.setRealm('surface');
-      a.planetView?.({ mode: 'night' });
+      await a.planetView?.({ mode: 'night' });
     },
     settle: 10000,
   },
@@ -149,7 +153,7 @@ const SHOTS = [
     title: 'Surface — coastline, water and sun glint',
     setup: async (a) => {
       await a.setRealm('surface');
-      a.planetView?.({ mode: 'ocean' });
+      await a.planetView?.({ mode: 'ocean' });
     },
     settle: 10000,
   },
@@ -215,8 +219,7 @@ async function main() {
   await page.mouse.click(WIDTH / 2, HEIGHT / 2);
   await sleep(1200);
 
-  // Force the top tier: the critic is judging the ceiling, not the phone path.
-  await page.evaluate(() => window.__aeon.setTier('ultra'));
+  await page.evaluate((t) => window.__aeon.setTier(t), TIER);
   await sleep(500);
 
   const list = ONLY.length ? SHOTS.filter((s) => ONLY.includes(s.id)) : SHOTS;
