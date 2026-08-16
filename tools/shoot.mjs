@@ -171,7 +171,12 @@ async function main() {
   server.stderr.on('data', (d) => process.stderr.write(`  [preview] ${d}`));
   await waitForServer(`http://localhost:${PORT}/`, 30000);
 
+  // The image ships a pinned Chromium build that may not match the Playwright
+  // package's expected revision, so point at the binary directly rather than
+  // downloading another copy.
+  const PINNED = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
   const browser = await chromium.launch({
+    executablePath: existsSync(PINNED) ? PINNED : undefined,
     args: [
       '--use-gl=angle',
       '--use-angle=swiftshader',

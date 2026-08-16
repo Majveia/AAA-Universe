@@ -50,7 +50,6 @@ import { GLSL_COLOR } from './Noise';
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const LENS_FRAG = /* glsl */ `
-${GLSL_COLOR}
 
 uniform float uIntensity;
 uniform float uStreak;
@@ -135,7 +134,10 @@ class LensEffect extends Effect {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 const FILM_FRAG = /* glsl */ `
-${GLSL_COLOR}
+float filmDither(vec2 fc){
+  return fract(52.9829189 * fract(dot(fc, vec2(0.06711056, 0.00583715))));
+}
+float filmLuma(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
 
 uniform float uTime;
 uniform float uGrain;
@@ -150,7 +152,7 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
 
   // Split-tone: cool the shadows, warm the highlights. One of the cheapest,
   // most effective things you can do to make a render feel photographed.
-  float l = luminance(c);
+  float l = filmLuma(c);
   vec3 tint = mix(uShadowTint, uHighlightTint, smoothstep(0.05, 0.75, l));
   c *= tint;
 
@@ -166,12 +168,12 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
   c = c * (1.0 - uLift) + uLift * vec3(0.012, 0.016, 0.028);
 
   // Grain scaled by 1-luminance: film grain lives in the mids and shadows.
-  float g = ignoise(gl_FragCoord.xy + vec2(uTime * 61.0, uTime * 37.0)) - 0.5;
+  float g = filmDither(gl_FragCoord.xy + vec2(uTime * 61.0, uTime * 37.0)) - 0.5;
   c += g * uGrain * (0.35 + 0.9 * (1.0 - l));
 
   // Final dither. Without this, an OLED shows visible banding across any
   // large dark gradient — which in a space game is most of the screen.
-  c += (ignoise(gl_FragCoord.xy * 1.7 + 11.0) - 0.5) * (1.0 / 255.0);
+  c += (filmDither(gl_FragCoord.xy * 1.7 + 11.0) - 0.5) * (1.0 / 255.0);
 
   outputColor = vec4(c, inputColor.a);
 }

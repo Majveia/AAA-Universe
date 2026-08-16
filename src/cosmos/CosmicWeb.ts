@@ -307,7 +307,6 @@ export class CosmicWeb implements ICosmicWeb {
     this.hazeMat = new ShaderMaterial({
       vertexShader: QUAD_VERT,
       fragmentShader: HAZE_FRAG,
-      glslVersion: '300 es' as any,
       uniforms: {
         uGridTex: new Uniform(null),
         uGridInfo: new Uniform(this.gridInfo),
@@ -331,7 +330,6 @@ export class CosmicWeb implements ICosmicWeb {
     this.compositeMat = new ShaderMaterial({
       vertexShader: QUAD_VERT,
       fragmentShader: COMPOSITE_FRAG,
-      glslVersion: '300 es' as any,
       uniforms: {
         uHaze: new Uniform(null),
         uTexel: new Uniform(new Vector2(1 / 512, 1 / 512)),
