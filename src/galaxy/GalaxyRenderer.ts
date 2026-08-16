@@ -37,11 +37,11 @@ import { GalaxyVolume } from './GalaxyVolume';
 /** Raymarch steps through the disc. Below about twelve it bands visibly. */
 function volumeSteps(q: QualityProfile | null): number {
   switch (q?.tier) {
-    case 'ultra': return 40;
-    case 'high': return 30;
-    case 'medium': return 22;
-    case 'low': return 16;
-    default: return 12;
+    case 'ultra': return 32;
+    case 'high': return 24;
+    case 'medium': return 18;
+    case 'low': return 12;
+    default: return 8;
   }
 }
 

@@ -110,7 +110,7 @@ float sech2(float x){
  * Arm overdensity at a point in the plane. The ridge of arm k sits where
  * log(r/r0)/b + 2πk/N equals the azimuth, turned by the pattern speed.
  */
-float armFactor(float r, float phi, out float young){
+float armFactor(float r, float phi, float grain, out float young){
   young = 0.0;
   if (uArms < 0.5) return 1.0;
   float ridge = log(max(r, uArmR0 * 0.35) / uArmR0) / uArmB + uPattern;
@@ -127,9 +127,9 @@ float armFactor(float r, float phi, out float young){
   float a = exp(-(d * d) / (width * width));
   // Flocculent detail: real arms are broken into spurs and feathers, and a
   // clean analytic ridge is the single most artificial thing about a
-  // procedural galaxy.
-  float spur = fbm(vec3(cos(phi) * r, sin(phi) * r, uSeed) * (3.5 / uRadius), 4) * 0.5 + 0.5;
-  a *= 0.55 + 0.9 * spur;
+  // procedural galaxy. The grain is sampled once per march step and shared
+  // with the dust — two noise calls per step, not two fBm towers.
+  a *= 0.55 + 0.9 * grain;
 
   young = clamp(a * ridgeAmp * 1.6, 0.0, 1.0);
   return 1.0 + a * ridgeAmp * 1.7;
@@ -170,8 +170,14 @@ void main(){
     if (r > uRadius * 1.05) continue;
 
     float phi = atan(p.z, p.x);
+    // One noise lookup per step, reused for arm spurs and for dust clumping.
+    // A galaxy is a backdrop for most of its screen time and cannot afford an
+    // fBm tower per sample; two octaves by hand is the whole budget.
+    float g1 = snoise(p * (3.4 / uRadius) + uSeed);
+    float g2 = snoise(p * (11.0 / uRadius) - uSeed);
+    float grain = clamp(0.5 + 0.5 * (g1 + g2 * 0.45) / 1.45, 0.0, 1.0);
     float young;
-    float arm = armFactor(r, phi, young);
+    float arm = armFactor(r, phi, grain, young);
 
     // Stellar density: exponential in radius, isothermal in height, with the
     // bar and the arms modulating it.
@@ -188,7 +194,7 @@ void main(){
     // galaxy has lanes: the absorbing material is a sheet inside the light.
     float dust = uDustAmount * exp(-r / (uHr * 1.35)) * sech2(p.y / uDustHz)
                * (0.45 + 0.85 * (arm - 1.0));
-    dust *= 0.55 + 0.9 * (fbm(p * (5.5 / uRadius) + uSeed, 4) * 0.5 + 0.5);
+    dust *= 0.55 + 0.9 * grain;
 
     // Extinction is wavelength-dependent — dust reddens what it does not hide.
     vec3 kappa = uDustColor * 0.0 + vec3(1.35, 1.0, 0.72);

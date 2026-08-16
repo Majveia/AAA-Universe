@@ -118,13 +118,19 @@ export class SurfaceRealm implements Realm {
         const near = universe.systemsNear(
           system.position[0], system.position[1], system.position[2], 260, 240
         ) as StarSystemSpec[];
-        near.sort((a: StarSystemSpec, b: StarSystemSpec) => (b.notable ? 1 : 0) - (a.notable ? 1 : 0));
+        // Rank by how good a world the system offers, not by whether the
+        // system is flagged interesting: the first landable rock in the list
+        // was beating a temperate ocean world four light years further out.
+        let bestScore = -1;
         for (const s of near) {
           const c = pickFrom(s);
-          if (c) {
+          if (!c) continue;
+          const score = worldScore(c);
+          if (score > bestScore) {
+            bestScore = score;
             chosen = c;
             host = s;
-            break;
+            if (score >= 100) break; // a terran world; nothing beats it
           }
         }
       }
@@ -798,6 +804,23 @@ function sunIntensity(p: PlanetSpec, s: StarSystemSpec | null): number {
   if (!s) return 1;
   const flux = s.stars[0].luminosityW / (4 * Math.PI * p.orbit.a * p.orbit.a);
   return MathUtils.clamp(Math.pow(flux / 1361, 0.42), 0.12, 3.2);
+}
+
+/**
+ * How good a world is to arrive at, for the purpose of picking a default.
+ * Ordered by what a person would rather be standing on, not by rarity.
+ */
+function worldScore(p: PlanetSpec): number {
+  const byClass: Record<string, number> = {
+    terran: 100, ocean: 82, jungle: 78, tundra: 60,
+    desert: 48, exotic: 44, glacial: 34, toxic: 24, molten: 18, barren: 10,
+  };
+  let s = byClass[p.klass] ?? 12;
+  if (p.ocean.present) s += 10;
+  if (p.atmosphere.present) s += 8;
+  if (p.life === 'fauna' || p.life === 'sapient') s += 12;
+  if (p.civilization.present) s += 6;
+  return s;
 }
 
 function describe(p: PlanetSpec): string {

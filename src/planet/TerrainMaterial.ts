@@ -91,6 +91,11 @@ uniform vec3 uEmissive;
 uniform float uEmissiveStrength;
 uniform float uSeaLevelR;
 uniform float uWetness;
+// These live in the uniform object and are fed every frame, but nothing in the
+// fragment body referenced them until aerial perspective did — an undeclared
+// identifier fails the whole program, and a failed program draws black.
+uniform vec3  uSunColor;
+uniform float uSunIntensity;
 uniform sampler2D uCloudTex;
 uniform float uCloudMidR;
 uniform float uCloudShadow;
