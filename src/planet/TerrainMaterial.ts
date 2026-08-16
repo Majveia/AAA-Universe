@@ -94,6 +94,9 @@ uniform sampler2D uCloudTex;
 uniform float uCloudMidR;
 uniform float uCloudShadow;
 uniform vec3  uSunDir;
+uniform vec3  uAerialBeta;   // extinction per metre at sea level, RGB
+uniform vec3  uAerialScat;   // scattering spectrum, normalised to max 1
+uniform float uAerialH;      // atmospheric scale height, m
 
 varying vec3  vDir;
 varying float vElev;
@@ -198,6 +201,47 @@ function fragBody(): string {
 `;
 }
 
+/**
+ * Aerial perspective, applied to the shaded colour.
+ *
+ * This is the terrain's job and nothing else's: the atmosphere shell is drawn
+ * with back faces, so over the planet's disc it fails the depth test against
+ * the ground and contributes only the limb. Without this block a mountain
+ * ninety kilometres away is exactly as saturated and contrasty as the rock at
+ * your feet, which is the single loudest tell that a landscape is not real.
+ *
+ * The integral is analytic. For an exponential atmosphere the mean density
+ * along a chord between two altitudes is H·(e^-h₁/H − e^-h₀/H)/(h₀ − h₁),
+ * which costs two exponentials and is exact — no marching.
+ */
+const AERIAL_BODY = /* glsl */ `
+  {
+    vec3 seg = vLocal - uCamLocal;
+    float dist = length(seg);
+    if (dist > 1.0 && uAerialH > 0.0) {
+      vec3 rd = seg / dist;
+      float hC = max(0.0, length(uCamLocal) - AE_R);
+      float hF = max(0.0, length(vLocal) - AE_R);
+      float dh = hC - hF;
+      float rho = abs(dh) < 1.0
+        ? exp(-hC / uAerialH)
+        : uAerialH * (exp(-hF / uAerialH) - exp(-hC / uAerialH)) / dh;
+      vec3 ext = exp(-uAerialBeta * (rho * dist));
+
+      float mu = dot(rd, uSunDir);
+      // Rayleigh's normalised phase, plus a cheap forward Mie lobe. The haze
+      // toward the sun really is several times brighter than the haze away
+      // from it, and that gradient is most of what the eye reads as distance.
+      float phaseR = 0.0596831 * (1.0 + mu * mu);
+      float phaseM = 0.16 * pow(max(mu, 0.0), 14.0);
+      vec3 inscat = uSunColor * uSunIntensity
+                  * (uAerialScat * phaseR + vec3(phaseM))
+                  * (1.0 - ext);
+      gl_FragColor.rgb = gl_FragColor.rgb * ext + inscat;
+    }
+  }
+`;
+
 /** Per-fragment normal perturbation, injected after the normal is established. */
 const NORMAL_BODY = /* glsl */ `
   {
@@ -256,6 +300,9 @@ export function makeTerrainMaterial(
     uCloudTex: { value: null },
     uCloudMidR: { value: spec.radiusM * 1.001 },
     uCloudShadow: { value: 0 },
+    uAerialBeta: { value: aerialBeta(spec) },
+    uAerialScat: { value: aerialScat(spec) },
+    uAerialH: { value: spec.atmosphere.present ? spec.atmosphere.scaleHeightM : 0 },
   };
 
   const material = new MeshStandardMaterial({
@@ -280,6 +327,9 @@ export function makeTerrainMaterial(
         `#include <common>\n${GLSL_NOISE}\n${GLSL_COLOR}\n${fieldGlsl}\n${FRAG_PARS}\n${CLOUD_SAMPLE_GLSL}`
       )
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>\n${NORMAL_BODY}`)
+      // After <opaque_fragment> has written gl_FragColor and before the output
+      // transform, so the haze is added in linear radiance like everything else.
+      .replace('#include <colorspace_fragment>', `${AERIAL_BODY}\n#include <colorspace_fragment>`)
       // Must land after <metalnessmap_fragment>, not after <roughnessmap_fragment>:
       // three declares metalnessFactor in the later chunk, and writing to it one
       // chunk early fails the whole program to compile (silent black terrain).
@@ -294,4 +344,28 @@ export function makeTerrainMaterial(
   material.customProgramCacheKey = () => `aeon-terrain-${spec.seed}`;
 
   return { material, uniforms };
+}
+
+/** Total extinction per metre at sea level: Rayleigh scattering plus Mie. */
+function aerialBeta(spec: PlanetSpec): Vector3 {
+  const a = spec.atmosphere;
+  if (!a.present) return new Vector3(0, 0, 0);
+  return new Vector3(
+    a.rayleigh[0] + a.mie + a.absorption[0],
+    a.rayleigh[1] + a.mie + a.absorption[1],
+    a.rayleigh[2] + a.mie + a.absorption[2]
+  );
+}
+
+/**
+ * The scattering spectrum, normalised so the strongest channel is 1. This is
+ * what colours the haze: on Earth the blue end scatters six times as hard as
+ * the red, which is why distant ridges go blue and sunsets do not.
+ */
+function aerialScat(spec: PlanetSpec): Vector3 {
+  const a = spec.atmosphere;
+  if (!a.present) return new Vector3(0, 0, 0);
+  const r = new Vector3(a.rayleigh[0] + a.mie, a.rayleigh[1] + a.mie, a.rayleigh[2] + a.mie);
+  const m = Math.max(r.x, r.y, r.z) || 1;
+  return r.divideScalar(m);
 }

@@ -31,6 +31,7 @@ const HEIGHT = parseInt(arg('height', '720'), 10);
 const PORT = parseInt(arg('port', '5199'), 10);
 const ONLY = arg('shots', '').split(',').filter(Boolean);
 const KEEP = args.includes('--keep');
+const DIAG = args.includes('--diag');
 const SETTLE = parseInt(arg('settle', '2500'), 10);
 // Headless here means SwiftShader — a software rasteriser. 'ultra' is the right
 // tier to judge on real hardware but never finishes a frame in software, so the
@@ -249,18 +250,21 @@ async function main() {
       await sleep(shot.settle ?? SETTLE);
 
       // Terrain streams in over many frames. Shooting on a timer catches it
-      // half-built; wait for the LOD queue to actually drain instead.
+      // half-built. The queue does not always reach zero — once the patch cap
+      // is hit it stays full for ever — so wait for the *build rate* to stop
+      // instead, which is true in both cases.
       if (shot.id.startsWith('planet') || shot.id.startsWith('surface')) {
-        await page
-          .waitForFunction(
-            () => {
-              const t = window.__aeon.planetDebug?.()?.terrain;
-              return !t || t.queued === 0;
-            },
-            null,
-            { timeout: 240000, polling: 1000 }
-          )
-          .catch(() => {});
+        let last = -1;
+        let still = 0;
+        for (let i = 0; i < 90; i++) {
+          const t = await page.evaluate(() => window.__aeon.planetDebug?.()?.terrain ?? null);
+          if (!t) break;
+          if (t.queued === 0) break;
+          still = t.builtEver === last ? still + 1 : 0;
+          last = t.builtEver;
+          if (still >= 3) break;
+          await sleep(1200);
+        }
         await sleep(1500);
       }
 
@@ -293,7 +297,7 @@ async function main() {
         )
         .catch(() => {});
 
-      if (shot.id === 'planet-orbit') {
+      if (DIAG && shot.id === 'planet-orbit') {
         await page.evaluate(() => {
           window.__aeon.planetLayer?.('ocean', false);
           window.__aeon.planetLayer?.('atmosphere', false);

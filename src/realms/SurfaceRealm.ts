@@ -26,6 +26,7 @@ import type { Realm, RealmContext } from '../core/Realm';
 import { FlyCamera } from './FlyCamera';
 import { orbitalPosition } from './Orbits';
 import { Planet } from '../planet/Planet';
+import { Skybox } from '../galaxy/Skybox';
 import { ScatterSystem } from '../surface/ScatterSystem';
 import { Wildlife } from '../surface/Wildlife';
 import { Weather } from '../surface/Weather';
@@ -43,6 +44,8 @@ import type {
   IWildlife,
   SystemContext,
 } from '../api/Contracts';
+import { makeGalaxy } from '../universe/Universe';
+import { hashCombine } from '../core/Rand';
 import type { PlanetSpec, StarSystemSpec } from '../universe/Types';
 
 type Mode = 'orbit' | 'ground';
@@ -64,6 +67,7 @@ export class SurfaceRealm implements Realm {
   private civ: ICivilization | null = null;
   private player: Player | null = null;
   private rover: IVehicle | null = null;
+  private sky = new Skybox();
 
   private spec: PlanetSpec | null = null;
   private system: StarSystemSpec | null = null;
@@ -83,6 +87,7 @@ export class SurfaceRealm implements Realm {
 
   constructor() {
     this.scene.background = new Color(0x000000);
+    this.scene.add(this.sky.root);
     this.scene.add(this.ambient);
     // No shadows from this light. A DirectionalLight's default shadow camera is
     // a ten-metre box; on a world 11,000 km across every fragment lands outside
@@ -152,6 +157,14 @@ export class SurfaceRealm implements Realm {
     this.fly.lookAt(new Vector3(0, 0, 0));
 
     this.updateSun();
+
+    // The deep sky is the host galaxy seen from inside, using the same seed the
+    // galaxy realm uses, so flying down from the map does not change the sky.
+    this.sky.build(
+      makeGalaxy(hashCombine(universe.seed, 0x1a7), [0, 0, 0], 'barred-spiral'),
+      host.position as [number, number, number]
+    );
+    this.sky.setQuality(ctx.quality);
 
     const hud = ctx.services.hud;
     this.hudRef = hud ?? null;
@@ -307,6 +320,23 @@ export class SurfaceRealm implements Realm {
       this.planet.setWeather(this.weather.state().cloudiness);
     }
 
+    /* ---- deep sky ---- */
+    this.sky.update(dt, sysCtx);
+    if (this.system) {
+      const st = this.system.stars[0];
+      // Angular radius of the star from this orbit — half a degree from Earth,
+      // and genuinely enormous from a close-orbiting world.
+      this.sky.setSun(this.sunDir, this.sunColor, this.sun.intensity, st.radiusM / Math.max(1, this.spec.orbit.a));
+    }
+    // Stars wash out under a lit sky and come back at dusk, and they are always
+    // there once you climb above most of the air.
+    const air = this.spec.atmosphere;
+    const aboveAir = air.present
+      ? MathUtils.clamp((altitude - air.thicknessM * 0.3) / Math.max(1, air.thicknessM * 0.5), 0, 1)
+      : 1;
+    const se = this.sunDir.dot(_dir.copy(this.camera.position).normalize());
+    this.sky.setOpacity(Math.max(aboveAir, MathUtils.clamp((0.05 - se) / 0.17, 0, 1)));
+
     this.updateHud(ctx, altitude);
 
     if (input.pressed('map')) ctx.engine.goto('system', { system: this.system, timeAccel: 1 }, 1.8);
@@ -459,6 +489,7 @@ export class SurfaceRealm implements Realm {
   }
 
   setQuality(q: any): void {
+    this.sky.setQuality(q);
     this.planet?.setQuality(q);
     this.scatter?.setQuality(q);
     this.wildlife?.setQuality(q);
@@ -511,9 +542,40 @@ export class SurfaceRealm implements Realm {
       this.fly.lookAt(new Vector3(0, 0, 0).addScaledVector(dir, R + h).add(new Vector3(300, 0, 300)));
     }
 
-    // Put the sun where it flatters the subject.
-    if (mode === 'night') this.simTime += this.spec.rotationS * 0.5;
-    else if (mode === 'city' || mode === 'ocean') this.simTime += this.spec.rotationS * 0.04;
+    // Put the sun where it flatters the subject. Raking light is what gives
+    // terrain its form; a sun overhead flattens the best landscape ever made.
+    const elevDeg =
+      mode === 'night' ? -14 :
+      mode === 'city' ? 4 :
+      mode === 'ocean' ? 9 :
+      mode === 'vista' ? 13 : 26;
+    this.frameSunAt(dir, (elevDeg * Math.PI) / 180);
+  }
+
+  /**
+   * Wind the planet's rotation until the star sits at a given elevation above
+   * the local horizon at `dir`. Same scan as frameSun, measured against the
+   * ground's own up vector instead of the camera's.
+   */
+  private frameSunAt(dir: Vector3, wantElev: number): void {
+    if (!this.spec) return;
+    const up = _tmp.copy(dir).normalize();
+    const day = this.spec.rotationS;
+    const t0 = this.simTime;
+    let best = t0;
+    let bestErr = Infinity;
+    for (let i = 0; i < 288; i++) {
+      this.simTime = t0 + (i / 288) * day;
+      this.updateSun();
+      const elev = Math.asin(MathUtils.clamp(this.sunDir.dot(up), -1, 1));
+      const err = Math.abs(elev - wantElev);
+      if (err < bestErr) {
+        bestErr = err;
+        best = this.simTime;
+      }
+    }
+    this.simTime = best;
+    this.updateSun();
   }
 
   /**
@@ -554,26 +616,85 @@ export class SurfaceRealm implements Realm {
         return d.addScaledVector(tangent, (best.radius * 1.9) / R).normalize();
       }
     }
-    // Search for a spot that suits the shot: a coastline for 'ocean', high
-    // relief for 'vista', anything solid otherwise.
-    let best = new Vector3(0.3, 0.5, 0.8).normalize();
-    let bestScore = -Infinity;
+    // Two passes. A coarse golden-angle sweep gets the altitude band and the
+    // local relief from cheap height lookups, and only the survivors pay for a
+    // full surface sample (five height evaluations each) to check that the
+    // ground there is actually somewhere a person would want to stand.
     const sea = this.planet!.seaLevelRadius();
-    for (let i = 0; i < 900; i++) {
-      const t = i * 2.399963; // golden-angle spiral: even coverage of a sphere
-      const y = 1 - (i / 899) * 2;
-      const r = Math.sqrt(Math.max(0, 1 - y * y));
-      const d = new Vector3(Math.cos(t) * r, y, Math.sin(t) * r);
-      const h = this.planet!.heightAt(d);
-      const alt = R + h - sea;
-      let score = 0;
-      if (mode === 'ocean') score = -Math.abs(alt - 8) + Math.abs(y) * -400;
-      else if (mode === 'vista') score = alt * 0.6 - Math.abs(y) * 3000;
-      else if (mode === 'night') score = alt > 0 ? 1000 - Math.abs(y) * 2000 : -1e9;
-      else score = alt > 2 ? alt * 0.2 - Math.abs(y) * 1200 : -1e9;
-      if (score > bestScore) {
-        bestScore = score;
-        best = d;
+    const alt = (d: Vector3) => R + this.planet!.heightAt(d) - (sea || R);
+
+    // What each shot is looking for, in metres above the waterline.
+    const band: Record<string, [number, number]> =
+      { ocean: [2, 30], vista: [120, 1400], night: [20, 900], ground: [20, 700] };
+    const [lo, hi] = band[mode] ?? band.ground;
+
+    const N = 1400;
+    const cands: { d: Vector3; score: number }[] = [];
+    const probe = new Vector3();
+    for (let i = 0; i < N; i++) {
+      const t = i * 2.399963; // golden angle: even coverage of a sphere
+      const y = 1 - (i / (N - 1)) * 2;
+      const rr = Math.sqrt(Math.max(0, 1 - y * y));
+      const d = new Vector3(Math.cos(t) * rr, y, Math.sin(t) * rr);
+      const a = alt(d);
+      if (mode === 'ocean') {
+        // A coastline: right at the waterline, and not at the pole.
+        if (a < -40 || a > 90) continue;
+        cands.push({ d, score: -Math.abs(a - 10) - Math.abs(y) * 300 });
+        continue;
+      }
+      if (a < 4) continue; // underwater, or the beach itself
+
+      // Relief within roughly ten kilometres. This is what decides whether the
+      // shot has mountains in it or is a featureless plain — and it is the
+      // single term that separates a vista from a parking lot.
+      const up = d;
+      const ref = Math.abs(up.y) > 0.9 ? _dir.set(1, 0, 0) : _dir.set(0, 1, 0);
+      const tx = probe.copy(ref).cross(up).normalize();
+      const e = 9000 / R;
+      let rMin = Infinity;
+      let rMax = -Infinity;
+      for (let k = 0; k < 4; k++) {
+        const ang = (k * Math.PI) / 2;
+        const off = _tmp
+          .copy(up)
+          .addScaledVector(tx, Math.cos(ang) * e)
+          .addScaledVector(_wind.copy(up).cross(tx), Math.sin(ang) * e)
+          .normalize();
+        const h = alt(off);
+        rMin = Math.min(rMin, h);
+        rMax = Math.max(rMax, h);
+      }
+      const relief = rMax - rMin;
+
+      // A soft window on altitude rather than a hard cut, so a world whose
+      // land all sits above the band still returns its least-bad spot.
+      const inBand = a >= lo && a <= hi ? 1 : 1 / (1 + Math.abs(a < lo ? lo - a : a - hi) / 600);
+      let score = inBand * 1000;
+      if (mode === 'vista') score += Math.min(relief, 3000) * 0.55;
+      else score += Math.min(relief, 900) * 0.25;
+      // Keep away from the poles: the shot wants weather and life, not ice.
+      score -= Math.abs(y) * 260;
+      cands.push({ d, score });
+    }
+
+    cands.sort((a, b) => b.score - a.score);
+    if (!cands.length) return new Vector3(0.3, 0.5, 0.8).normalize();
+    if (mode === 'ocean') return cands[0].d;
+
+    // Second pass: among the best few, prefer ground that is alive and not a
+    // cliff face. `sampleSurface` is expensive, so only forty of them run it.
+    let best = cands[0].d;
+    let bestScore = -Infinity;
+    for (const c of cands.slice(0, 40)) {
+      const sm = this.planet!.sampleSurface(c.d);
+      if (sm.underwater) continue;
+      let sc = c.score;
+      sc += sm.temperature * sm.humidity * 900;      // somewhere things grow
+      sc -= Math.max(0, sm.slope - 0.35) * 2200;     // standing, not clinging
+      if (sc > bestScore) {
+        bestScore = sc;
+        best = c.d;
       }
     }
     return best;
@@ -607,6 +728,7 @@ export class SurfaceRealm implements Realm {
   }
 
   dispose(): void {
+    this.sky.dispose();
     this.teardown();
   }
 }

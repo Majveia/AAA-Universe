@@ -42,7 +42,9 @@ import { BodyRenderer } from './BodyRenderer';
 import { orbitPolyline, orbitalPosition } from './Orbits';
 import { AU, type PlanetSpec, type StarSystemSpec } from '../universe/Types';
 import type { HudTarget } from '../api/Contracts';
-import { Rng } from '../core/Rand';
+import { Rng, hashCombine } from '../core/Rand';
+import { makeGalaxy } from '../universe/Universe';
+import { Skybox } from '../galaxy/Skybox';
 
 
 /**
@@ -130,6 +132,7 @@ export class SystemRealm implements Realm {
   private timeInRealm = 0;
   private sunColor: [number, number, number] = [1, 1, 1];
   private approachTarget: BodyEntry | null = null;
+  private sky = new Skybox();
 
   constructor() {
     this.camera = this.fly.camera;
@@ -137,6 +140,7 @@ export class SystemRealm implements Realm {
     // Interplanetary space is not lit by anything but the star, but a floor of
     // ambient keeps the unlit hemisphere from being a pure black cut-out.
     this.scene.add(new AmbientLight(0x0a0e18, 0.25));
+    this.scene.add(this.sky.root);
     this.scene.add(this.star.root);
   }
 
@@ -160,6 +164,14 @@ export class SystemRealm implements Realm {
     this.fly.throttle = 0;
     this.updateBodies(0);
     this.fly.lookAt(this.toLocal(this.bodies[0]?.absolute ?? new Vector3(), new Vector3()));
+
+    // Interstellar space is not empty: the host galaxy is the backdrop, and
+    // where you are inside it decides how much of the sky the band fills.
+    this.sky.build(
+      makeGalaxy(hashCombine(universe.seed, 0x1a7), [0, 0, 0], 'barred-spiral'),
+      spec.position as [number, number, number]
+    );
+    this.sky.setQuality(ctx.quality);
 
     const hud = ctx.services.hud;
     hud?.setContext('space');
@@ -311,6 +323,12 @@ export class SystemRealm implements Realm {
     if (this.bodyGlow) {
       (this.bodyGlow.material as ShaderMaterial).uniforms.uPixPerRad.value = pixPerRad;
     }
+
+    /* ---- deep sky ---- */
+    this.sky.update(dt, { renderer: ctx.renderer, camera: this.camera, time: ctx.time } as any);
+    // No star disc here: StarRenderer already draws the real photosphere, and
+    // two suns in one sky is one too many.
+    this.sky.setSun(_v0.copy(starLocal).normalize().negate(), this.sunColor, 0, 0);
 
     /* ---- HUD ---- */
     const hud = ctx.services.hud;
@@ -494,6 +512,7 @@ export class SystemRealm implements Realm {
   }
 
   dispose(): void {
+    this.sky.dispose();
     this.teardown();
     this.star.dispose();
   }
@@ -501,6 +520,7 @@ export class SystemRealm implements Realm {
 
 const _tmpA = new Vector3();
 const _sz = new Vector2();
+const _v0 = new Vector3();
 
 function describeStar(s: StarSystemSpec): string {
   const st = s.stars[0];
