@@ -10,8 +10,12 @@ about *where things actually stand* and what will bite you.
 
 ```bash
 npm install
-npm run typecheck          # must be clean before anything else
+npm run check              # typecheck · GLSL guard · build · city generator
 npm run dev                # http://localhost:5173
+
+# before touching a shader, and after: compiles every material the game can
+# build against a real WebGL2 driver. CI runs it on every push.
+npm run shadercheck
 
 # what is eating the frame — ~90 seconds, no screenshots
 node tools/perf.mjs --view orbit          # orbit | ground | system | galaxy | cosmos
@@ -288,6 +292,23 @@ tools/
 5. **Wildlife, weather, audio, touch controls** — all still dark.
 6. Only then go back for polish: galaxy hint text, the framebuffer feedback
    warning, shadow verification, a higher-resolution pass on the hero shots.
+
+## 8. What CI enforces
+
+`ci.yml` runs on every pull request and on the default branch:
+
+| Job | Covers |
+| --- | --- |
+| `typecheck · shaders (static) · build · generators` | `npm run check`, plus it uploads the built `dist` as an artifact so a branch can be looked at without deploying over the live page. ~20 s. |
+| `shaders (compiled)` | Every material the game can build, linked against real WebGL2 with the engine's own renderer configuration. ~45 s. |
+
+`deploy.yml` runs the same gate before publishing to Pages, so the live build at
+https://majveia.github.io/AAA-Universe/ is always one that passed.
+
+None of this can judge a picture. It only guarantees that what you are looking
+at is the thing the code describes — which, given §5, is not a small guarantee.
+
+---
 
 A note on judging: "it renders" has been wrong every single time in this
 project. Every realm had a first-render bug that was invisible from the code,

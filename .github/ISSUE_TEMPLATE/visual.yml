@@ -1,0 +1,58 @@
+name: Visual defect
+description: Something renders wrong, or does not render at all.
+labels: ['visual']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Read this first if the thing is *missing* rather than wrong: a fragment
+        program that fails to compile does not throw and does not draw — the
+        object is simply absent and everything around it looks fine. Run
+        `npm run shadercheck` before anything else. It has been the answer
+        three times.
+
+  - type: input
+    id: where
+    attributes:
+      label: Where
+      description: Realm and view, e.g. "surface, planetView({mode:'city'})".
+      placeholder: surface / city
+    validations:
+      required: true
+
+  - type: textarea
+    id: capture
+    attributes:
+      label: The picture
+      description: |
+        Paste the capture. "It renders" has been wrong every single time in this
+        project; the image is the report.
+        `node tools/shoot.mjs --shots <id> --tier low --width 640 --height 360`
+    validations:
+      required: true
+
+  - type: textarea
+    id: debug
+    attributes:
+      label: planetDebug()
+      description: |
+        `window.__aeon.planetDebug()` — terrain LOD, scatter counts, civ state,
+        player and ship pose. For a missing city, `civ.nearestM` against
+        `civ.nearestRadius` says whether the camera is even near it, and
+        `civ.readyVerts` says whether geometry was installed at all.
+      render: json
+
+  - type: input
+    id: tier
+    attributes:
+      label: Quality tier and hardware
+      placeholder: high, RTX 4070 / medium, SwiftShader in CI
+
+  - type: checkboxes
+    id: ruled-out
+    attributes:
+      label: Ruled out
+      options:
+        - label: '`npm run shadercheck` is clean'
+        - label: '`npm run glslcheck` is clean'
+        - label: Terrain had finished streaming (`terrain.queued` was 0)
