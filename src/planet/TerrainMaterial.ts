@@ -132,11 +132,12 @@ function fragBody(): string {
   float veryNear = 1.0 - smoothstep(6.0, 90.0, vCamDist);
 
   // Detail bands. The anchor's frequency is chosen so 1/f is metres × 32:
-  // grain is 12 cm, coarse 1.2 m, macro 9 m, patch 40 m, region 150 m.
+  // grain is 12 cm, coarse 1.2 m, macro 9 m, mid 40 m, region 150 m.
+  // 'patch' is a reserved word in GLSL ES 3.0; this one is called 'mid'.
   float grain = fbm(dp * 260.0, 4) * 0.5 + 0.5;
   float coarse = fbm(dp * 26.0, 5) * 0.5 + 0.5;
   float macro = fbm(dp * 3.4, 4) * 0.5 + 0.5;
-  float patch = fbm(dp * 0.80, 4) * 0.5 + 0.5;
+  float mid = fbm(dp * 0.80, 4) * 0.5 + 0.5;
   float region = fbm(dp * 0.21, 3) * 0.5 + 0.5;
 
   float sea = uSeaLevelR - AE_R;
@@ -153,8 +154,8 @@ function fragBody(): string {
   // ground is a patchwork at tens of metres: bare soil here, gravel there,
   // a different parent rock over the next rise. These two bands do that, and
   // they are the difference between terrain and a painted sphere.
-  vec3 gravel = mix(uRock, uSand, patch * 0.55 + 0.2);
-  albedo = mix(albedo, gravel, smoothstep(0.58, 0.86, patch) * 0.55);
+  vec3 gravel = mix(uRock, uSand, mid * 0.55 + 0.2);
+  albedo = mix(albedo, gravel, smoothstep(0.58, 0.86, mid) * 0.55);
   albedo = mix(albedo, uHighland, smoothstep(0.62, 0.24, region) * 0.30);
   // Large-scale tonal drift, so no two hillsides are the same value.
   albedo *= mix(0.80, 1.22, region);
@@ -162,11 +163,11 @@ function fragBody(): string {
   // Vegetation where it is warm and wet and not too steep — and clumped, not
   // spread evenly. A uniform green wash reads as a shader; patches read as
   // ground that something chose to grow on.
-  float clump = smoothstep(0.34, 0.72, patch * 0.6 + macro * 0.4);
+  float clump = smoothstep(0.34, 0.72, mid * 0.6 + macro * 0.4);
   float vegMask = smoothstep(0.30, 0.62, hum * temp)
                 * (1.0 - smoothstep(0.30, 0.62, slope))
                 * mix(0.25, 1.0, clump);
-  vec3 veg = mix(uVeg, uVegAlt, macro * 0.6 + patch * 0.4);
+  vec3 veg = mix(uVeg, uVegAlt, macro * 0.6 + mid * 0.4);
   // Dry stems and litter at the edges of a stand, where it thins out.
   veg = mix(mix(uSand, uVeg, 0.45), veg, smoothstep(0.15, 0.55, clump));
   albedo = mix(albedo, veg, vegMask * 0.92);
@@ -207,7 +208,7 @@ function fragBody(): string {
   float rough = mix(0.94, 0.70, snow);
   rough = mix(rough, 0.86, rockMask);
   // Polished rock and dusty soil do not scatter alike.
-  rough = mix(rough, 0.72, smoothstep(0.6, 0.9, patch) * 0.6);
+  rough = mix(rough, 0.72, smoothstep(0.6, 0.9, mid) * 0.6);
   rough = mix(rough, 0.55, wet);
   albedo *= mix(1.0, 0.62, wet);
 
