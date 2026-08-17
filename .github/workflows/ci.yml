@@ -2,8 +2,11 @@ name: CI
 
 on:
   pull_request:
+  # Only the default branch. A push to a feature branch is already covered by
+  # its pull request, and running both fires every job twice — two identical
+  # runs, doubled minutes, and two jobs racing to write the same npm cache.
   push:
-    branches: ['**']
+    branches: ['claude/aaa-3d-universe-threejs-x9kbrt']
   workflow_dispatch:
 
 # A newer push to the same branch makes the older run irrelevant.
@@ -25,9 +28,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: lts/*
           cache: npm
@@ -49,7 +52,7 @@ jobs:
       # The built game, downloadable from the run summary. Useful for looking at
       # a branch without deploying it over the live page.
       - name: Upload build
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: aeon-dist-${{ github.sha }}
           path: dist
@@ -69,9 +72,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: lts/*
           cache: npm
