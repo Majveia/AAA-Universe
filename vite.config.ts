@@ -19,9 +19,15 @@ export default defineConfig({
     chunkSizeWarningLimit: 4000,
     rollupOptions: {
       output: {
-        manualChunks: {
-          three: ['three'],
-          postprocessing: ['postprocessing'],
+        // The function form, not the object form. Vite 8 bundles with rolldown,
+        // which only accepts a function here — and rollup accepts both, so this
+        // spelling works on the version pinned today and on the next major.
+        // Splitting these two out keeps the app chunk small enough that a code
+        // change does not invalidate 700 kB of unchanged vendor code.
+        manualChunks(id: string) {
+          if (id.includes('node_modules/three')) return 'three';
+          if (id.includes('node_modules/postprocessing')) return 'postprocessing';
+          return undefined;
         },
       },
     },
