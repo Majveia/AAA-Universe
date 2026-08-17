@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  pull_request:
+  # Only the default branch. A push to a feature branch is already covered by
+  # its pull request, and running both fires every job twice — two identical
+  # runs, doubled minutes, and two jobs racing to write the same npm cache.
+  push:
+    branches: ['claude/aaa-3d-universe-threejs-x9kbrt']
+  workflow_dispatch:
+
+# A newer push to the same branch makes the older run irrelevant.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  # ───────────────────────────────────────────────────────────────────────────
+  # Everything that does not need a GPU, a browser, or a rendered frame.
+  # Ordered cheapest-first: the static guards fail in milliseconds, and there is
+  # no point spending ninety seconds on a build to discover a typo in a shader.
+  # ───────────────────────────────────────────────────────────────────────────
+  check:
+    name: typecheck · shaders (static) · build · generators
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: GLSL reserved words
+        run: npm run glslcheck -- --verbose
+
+      - name: Build
+        run: npm run build
+
+      - name: City generator, all eight architectural styles
+        run: npm run civcheck
+
+      # The built game, downloadable from the run summary. Useful for looking at
+      # a branch without deploying it over the live page.
+      - name: Upload build
+        uses: actions/upload-artifact@v7
+        with:
+          name: aeon-dist-${{ github.sha }}
+          path: dist
+          retention-days: 14
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # The one that has actually caught things.
+  #
+  # A fragment program that fails to compile does not throw and does not draw —
+  # the object is simply absent. This project has lost real time to that three
+  # times, once for an entire subsystem. So every material the game can build is
+  # compiled here against a real WebGL2 driver, with the engine's own renderer
+  # configuration, on every push.
+  # ───────────────────────────────────────────────────────────────────────────
+  shaders:
+    name: shaders (compiled)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+
+      - run: npm ci
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Compile every material
+        run: npm run shadercheck

@@ -126,6 +126,20 @@ async function boot(): Promise<void> {
     ready: true,
     goto: (id: RealmId, payload?: any) => engine.goto(id, payload, 0.6),
     setRealm: (id: RealmId, payload?: any) => engine.setRealm(id, payload),
+    /**
+     * Jump straight to a named place. `teleport('surface', { mode: 'city' })`
+     * lands on the best settlement on the current world; `teleport('system')`
+     * puts you back in the orrery. The screenshot harness and the visual
+     * critique loop both drive the game through this.
+     */
+    teleport: async (id: RealmId, opts: any = {}) => {
+      await engine.setRealm(id, opts.payload);
+      if (id === 'surface') await surface.debugView(opts);
+      else if (id === 'system') system.debugView(opts);
+      else if (id === 'galaxy') await galaxy.debugView(opts);
+      else if (id === 'cosmos') await cosmos.debugView(opts);
+      return engine.stats;
+    },
     setTier: (t: any) => engine.adaptive.setManual(t),
     capture: () => engine.capture(),
     stats: () => ({ ...engine.stats, tier: engine.adaptive.tier, realm: engine.current?.id }),
@@ -140,9 +154,21 @@ async function boot(): Promise<void> {
     planetDebug: () => surface.debugPlanet(),
     galaxyDebug: () => galaxy.debugGalaxy(),
     planetLayer: (l: any, v: boolean) => surface.setLayer(l, v),
+    /** Terrain build budget, ms/frame. See SurfaceRealm.setStreamBudget. */
+    stream: (ms: number) => surface.setStreamBudget(ms),
     plainTerrain: (v: boolean) => surface.setPlainTerrain(v),
     webDebug: (o: any) => cosmos.debugWeb({ ...(o ?? {}), renderer: engine.renderer }),
     setPost: (v: boolean) => (engine.postEnabled = v),
+    /**
+     * Shadows off. A ground shot re-renders every scatter instance into the
+     * shadow map, and on a software rasteriser that one pass is most of the
+     * frame — enough that a city cannot finish streaming in before whatever is
+     * driving the harness gives up on it.
+     */
+    setShadows: (v: boolean) => {
+      engine.renderer.shadowMap.enabled = v;
+      engine.renderer.shadowMap.needsUpdate = true;
+    },
     debugBox: (v: boolean) => cosmos.setDebugBox(v),
   };
 }

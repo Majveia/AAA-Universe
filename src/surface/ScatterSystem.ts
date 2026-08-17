@@ -290,16 +290,28 @@ varying vec3 vWorldPos;
    * budget. Only for the screenshot harness and for a scripted landing, where
    * a second of hitch is preferable to a shot of empty ground.
    */
-  prime(maxCells = 400): number {
+  /**
+   * Fill the scatter around the viewer synchronously, for an offline consumer
+   * that would rather block once than watch a field grow in over a minute.
+   *
+   * Both bounds matter. A cell can hold several thousand instances and each one
+   * costs a terrain evaluation, so a few hundred cells is a few million calls —
+   * enough to stall the page for minutes and, from inside a `page.evaluate`,
+   * look exactly like a hang. `budgetMs` is the backstop; `maxCells` is the
+   * thing to actually tune, and sixty cells is already a horizon's worth.
+   */
+  prime(maxCells = 96, budgetMs = 4000): number {
     if (!this.planet || !this.material) return 0;
     const density = this.quality?.scatterDensity ?? 1;
     if (density <= 0.001) return 0;
+    const t0 = performance.now();
     let built = 0;
     for (let pass = 0; pass < 24 && built < maxCells; pass++) {
+      if (performance.now() - t0 > budgetMs) break;
       this.collectPending();
       if (!this.pending.length) break;
       for (const c of this.pending) {
-        if (built >= maxCells) break;
+        if (built >= maxCells || performance.now() - t0 > budgetMs) break;
         this.buildCell(c.face, c.i, c.j, c.key, density);
         built++;
       }

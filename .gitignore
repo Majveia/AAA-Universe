@@ -4,3 +4,5 @@ dist/
 *.log
 .vite/
 captures/
+.civcheck-*/
+.shadercheck-*/

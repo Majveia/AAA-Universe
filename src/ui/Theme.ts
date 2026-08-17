@@ -267,6 +267,30 @@ export const HUD_CSS = `
 .ae-prompt.ae-on{opacity:1;animation:ae-breathe 3.6s var(--ae-ease-io) infinite;}
 @keyframes ae-breathe{0%,100%{opacity:.42;}50%{opacity:.95;}}
 
+/* The action prompt: what pressing the button here would do. Unlike a toast it
+   is a statement about the world's current state, so it lives in one node that
+   is rewritten, never a queue that is appended to. */
+.ae-act{
+  position:absolute;left:50%;bottom:calc(var(--ae-sb) + clamp(52px,10vh,96px));
+  transform:translate(-50%,6px);
+  display:flex;align-items:center;gap:9px;
+  padding:6px 13px;border-radius:999px;
+  background:rgba(8,11,16,.44);
+  border:1px solid var(--ae-hair);
+  backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px);
+  font-size:var(--ae-micro);letter-spacing:.26em;text-transform:uppercase;
+  color:var(--ae-ink);white-space:nowrap;
+  opacity:0;pointer-events:none;
+  transition:opacity .22s var(--ae-ease),transform .22s var(--ae-ease);
+}
+.ae-act.ae-on{opacity:1;transform:translate(-50%,0);}
+.ae-act i{
+  font-style:normal;display:grid;place-items:center;
+  min-width:19px;height:19px;padding:0 4px;border-radius:5px;
+  background:rgba(255,255,255,.10);border:1px solid var(--ae-hair);
+  letter-spacing:.04em;color:var(--ae-ink);
+}
+
 /* ═══════════════════ title card ═══════════════════ */
 
 .ae-title{

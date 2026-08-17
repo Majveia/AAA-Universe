@@ -370,6 +370,8 @@ export class Planet implements IPlanet {
   private sunIntensity = 1;
   private time = 0;
   private quality: QualityProfile | null = null;
+  /** Non-zero while an offline consumer has asked for faster streaming. */
+  private buildBudgetOverride = 0;
   private screenH = 1080;
   private fovY = 1.2;
 
@@ -556,6 +558,23 @@ export class Planet implements IPlanet {
     return this.quad.ensureDetail(_d.copy(direction).normalize(), radiusM);
   }
 
+  /**
+   * Override the terrain build budget, in milliseconds per frame.
+   *
+   * The normal budget is a few milliseconds because terrain must never be the
+   * reason a frame is late. That is the right trade at sixty frames a second
+   * and the wrong one at three: the screenshot harness runs on a software
+   * rasteriser, where a whole second buys nine milliseconds of streaming and
+   * `ensureDetail` never resolves. Raising it lets an offline consumer trade
+   * frame rate for a finished world. Pass 0 to go back to the quality tier's.
+   */
+  setBuildBudget(msPerFrame: number): void {
+    this.buildBudgetOverride = msPerFrame > 0 ? msPerFrame : 0;
+    this.quad.setOptions({
+      budgetMsPerFrame: this.buildBudgetOverride || Math.max(1, this.quality?.terrainBudgetPerFrame ?? 3),
+    });
+  }
+
   setSun(directionWorld: Vector3, colorLinear: [number, number, number], intensity: number): void {
     this.sunDir.copy(directionWorld).normalize();
     this.sunColor = colorLinear;
@@ -730,7 +749,7 @@ export class Planet implements IPlanet {
     this.quad.setOptions({
       maxDepth: Math.min(16, q.terrainMaxDepth),
       patchRes: q.terrainPatchRes,
-      budgetMsPerFrame: Math.max(1, q.terrainBudgetPerFrame),
+      budgetMsPerFrame: this.buildBudgetOverride || Math.max(1, q.terrainBudgetPerFrame),
       pixelError: q.tier === 'ultra' ? 1.5 : q.tier === 'high' ? 2.0 : 3.0,
       maxPatches: q.tier === 'ultra' ? 1400 : q.tier === 'high' ? 900 : 500,
     });

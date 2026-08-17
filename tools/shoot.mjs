@@ -24,19 +24,27 @@ function arg(name, def) {
   return i >= 0 && args[i + 1] ? args[i + 1] : def;
 }
 const OUT = arg('out', 'captures');
-// Default to 720p: this harness runs against a software rasteriser, and at
-// 1080p a single frame takes longer than Playwright's screenshot timeout.
-const WIDTH = parseInt(arg('width', '1280'), 10);
-const HEIGHT = parseInt(arg('height', '720'), 10);
+// This harness usually runs against SwiftShader, where fill rate is the whole
+// budget. 960x540 is the largest size at which the post chain still finishes a
+// frame in seconds rather than minutes; pass --width/--height on real hardware.
+const WIDTH = parseInt(arg('width', '960'), 10);
+const HEIGHT = parseInt(arg('height', '540'), 10);
 const PORT = parseInt(arg('port', '5199'), 10);
 const ONLY = arg('shots', '').split(',').filter(Boolean);
 const KEEP = args.includes('--keep');
 const DIAG = args.includes('--diag');
 const SETTLE = parseInt(arg('settle', '2500'), 10);
+const STREAM_MS = parseInt(arg('stream', '120'), 10);
 // Headless here means SwiftShader — a software rasteriser. 'ultra' is the right
 // tier to judge on real hardware but never finishes a frame in software, so the
 // tier is a flag with a tractable default.
 const TIER = arg('tier', 'medium');
+// Playwright's screenshot path composites the page and waits on the compositor,
+// which under a software rasteriser costs a minute a frame. The canvas is
+// created with preserveDrawingBuffer, so reading it directly through the debug
+// bridge is the same pixels for a fraction of the time. --dom forces the slow
+// path when the HUD needs to be in shot.
+const DOM_SHOT = args.includes('--dom');
 
 /**
  * The shot list. Each entry drives the running game into a specific state and
@@ -234,6 +242,11 @@ async function main() {
   await sleep(1200);
 
   await page.evaluate((t) => window.__aeon.setTier(t), TIER);
+  // Nobody is playing, so frame rate is worth nothing and a finished world is
+  // worth everything. Under SwiftShader the default few-milliseconds-per-frame
+  // terrain budget buys almost no streaming at all, and `ensureDetail` — which
+  // every ground shot waits on — simply never resolves.
+  await page.evaluate((ms) => window.__aeon.stream?.(ms), STREAM_MS);
   await sleep(500);
 
   const list = ONLY.length ? SHOTS.filter((s) => ONLY.includes(s.id)) : SHOTS;
@@ -303,11 +316,11 @@ async function main() {
           window.__aeon.planetLayer?.('atmosphere', false);
         });
         await sleep(2500);
-        await page.screenshot({ path: path.join(OUT, 'planet-terrain-only.png'), timeout: 180000 });
+        await grab(page, path.join(OUT, 'planet-terrain-only.png'));
         console.log('\n  wrote planet-terrain-only.png');
         await page.evaluate(() => window.__aeon.plainTerrain?.(true));
         await sleep(2500);
-        await page.screenshot({ path: path.join(OUT, 'planet-terrain-plain.png'), timeout: 180000 });
+        await grab(page, path.join(OUT, 'planet-terrain-plain.png'));
         console.log('  wrote planet-terrain-plain.png');
         await page.evaluate(() => window.__aeon.plainTerrain?.(false));
         await sleep(1500);
@@ -318,7 +331,7 @@ async function main() {
         await sleep(2000);
       }
       const file = path.join(OUT, `${shot.id}.png`);
-      await page.screenshot({ path: file, type: 'png', timeout: 180000 });
+      await grab(page, file);
       const stats = await page.evaluate(() => window.__aeon.stats());
       if (shot.id.startsWith('planet') || shot.id.startsWith('surface')) {
         const pd = await page.evaluate(() => window.__aeon.planetDebug?.());
@@ -332,7 +345,10 @@ async function main() {
     }
   }
 
-  writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify({ manifest, logs: logs.slice(0, 200) }, null, 2));
+  writeFileSync(
+    path.join(OUT, 'manifest.json'),
+    JSON.stringify({ manifest, shaderErrors, logs: logs.slice(0, 200) }, null, 2)
+  );
 
   if (logs.length) {
     console.log(`\n› ${logs.length} console errors/warnings (first 20):`);
@@ -342,7 +358,36 @@ async function main() {
   await browser.close();
   server.kill('SIGTERM');
   console.log(`\n› wrote ${manifest.filter((m) => !m.error).length}/${list.length} shots to ${OUT}/`);
-  process.exit(0);
+
+  // A shader that fails to compile does not throw and does not draw: the object
+  // is simply absent and every shot still "succeeds". That is how a reserved
+  // word in the façade shader survived long enough for a whole city to generate
+  // correctly and render as nothing at all. Never exit clean on one again.
+  if (shaderErrors.length) {
+    console.error(`\n!! ${shaderErrors.length} shader compile failure(s) — the shot list is not trustworthy.`);
+    process.exit(2);
+  }
+  process.exit(manifest.some((m) => m.error) ? 1 : 0);
+}
+
+/**
+ * Take the picture.
+ *
+ * `__aeon.capture()` is a `toDataURL` on the live WebGL canvas, which is why the
+ * renderer keeps `preserveDrawingBuffer` on. It costs one readback instead of a
+ * full compositor round trip, and on a software rasteriser that is the
+ * difference between two seconds and two minutes.
+ */
+async function grab(page, file) {
+  if (DOM_SHOT) {
+    await page.screenshot({ path: file, type: 'png', timeout: 300000 });
+    return;
+  }
+  const url = await page.evaluate(() => window.__aeon.capture(), null, { timeout: 300000 });
+  if (typeof url !== 'string' || !url.startsWith('data:image/png;base64,')) {
+    throw new Error('capture() did not return a PNG data URL');
+  }
+  writeFileSync(file, Buffer.from(url.slice('data:image/png;base64,'.length), 'base64'));
 }
 
 function run(cmd, argv) {

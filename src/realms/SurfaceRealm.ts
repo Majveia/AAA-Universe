@@ -19,6 +19,7 @@ import {
   DirectionalLight,
   MathUtils,
   PerspectiveCamera,
+  Quaternion,
   Scene,
   Vector3,
 } from 'three';
@@ -33,6 +34,7 @@ import { Weather } from '../surface/Weather';
 import { Civilization } from '../civ/Civilization';
 import { Player } from '../entities/Player';
 import { Rover } from '../entities/Rover';
+import { Starship } from '../entities/Starship';
 import type {
   CollisionProvider,
   HudTarget,
@@ -49,11 +51,24 @@ import { hashCombine } from '../core/Rand';
 import type { QualityProfile } from '../core/Settings';
 import type { PlanetSpec, StarSystemSpec } from '../universe/Types';
 
-type Mode = 'orbit' | 'ground';
+/**
+ * Where the player is.
+ *
+ *   ship   — flying, from four radii out down to a landing on the gear
+ *   ground — on foot, or riding the rover
+ *   orbit  — the free camera. Gameplay never enters it; it exists for worlds
+ *            with no surface to stand on, and for the screenshot harness.
+ */
+type Mode = 'ship' | 'ground' | 'orbit';
 
 export interface PlanetViewOptions {
   mode?: 'orbit' | 'limb' | 'vista' | 'ground' | 'city' | 'night' | 'ocean';
+  /** How long to wait for terrain to stream in before posing anyway, ms. */
+  detailTimeoutMs?: number;
 }
+
+/** How close you have to be to a vehicle before you can get into it. */
+const BOARD_RANGE = 9;
 
 export class SurfaceRealm implements Realm {
   readonly id = 'surface' as const;
@@ -68,6 +83,7 @@ export class SurfaceRealm implements Realm {
   private civ: ICivilization | null = null;
   private player: Player | null = null;
   private rover: IVehicle | null = null;
+  private ship: Starship | null = null;
   private sky = new Skybox();
 
   private spec: PlanetSpec | null = null;
@@ -76,6 +92,11 @@ export class SurfaceRealm implements Realm {
   private simTime = 0;
   private timeInRealm = 0;
   private aspect = 1;
+  /** Set while the warp drive is spooling, so we only leave the realm once. */
+  private departing = false;
+  private shipCamPos = new Vector3();
+  private shipCamQuat = new Quaternion();
+  private shipView: 'first' | 'third' = 'third';
 
   private sun = new DirectionalLight(0xffffff, 3.0);
   private ambient = new AmbientLight(0x101828, 0.6);
@@ -86,6 +107,10 @@ export class SurfaceRealm implements Realm {
   private titleShown = false;
   private hudRef: any = null;
   private quality: QualityProfile | null = null;
+  /** Non-zero when an offline consumer has asked terrain to stream flat out. */
+  private streamBudget = 0;
+  /** Settlement the next ground shot should face, if any. */
+  private lookAtSite: Vector3 | null = null;
 
   constructor() {
     this.scene.background = new Color(0x000000);
@@ -154,12 +179,27 @@ export class SurfaceRealm implements Realm {
       : new Vector3(0.4, 0.35, 0.85).normalize();
     this.landingDir.copy(approach);
 
-    this.mode = 'orbit';
+    this.departing = false;
     this.fly.position.copy(approach).multiplyScalar(spec.radiusM * 3.0);
     this.fly.velocity.set(0, 0, 0);
     this.fly.baseSpeed = spec.radiusM * 0.08;
     this.fly.minDistanceTo = { center: new Vector3(0, 0, 0), radius: spec.radiusM + spec.terrain.maxElevationM + 40 };
     this.fly.lookAt(new Vector3(0, 0, 0));
+
+    if (this.ship) {
+      // Arrive under way, nose down toward the world, high enough that the
+      // atmosphere is still a line on the horizon rather than a wall.
+      this.mode = 'ship';
+      this.ship.position.copy(approach).multiplyScalar(spec.radiusM + Math.max(90000, spec.atmosphere.thicknessM * 1.6));
+      this.ship.velocity.copy(approach).multiplyScalar(-260);
+      this.ship.setAtmosphere(spec.atmosphere.thicknessM, spec.atmosphere.present);
+      this.ship.setDriver(true);
+      this.ship.enterFlight();
+      this.ship.faceToward(new Vector3(0, 0, 0));
+      this.player?.board(null);
+    } else {
+      this.mode = 'orbit';
+    }
 
     this.updateSun();
 
@@ -183,6 +223,7 @@ export class SurfaceRealm implements Realm {
 
     this.planet = new Planet(spec);
     this.planet.setQuality(ctx.quality);
+    if (this.streamBudget > 0) (this.planet as any).setBuildBudget?.(this.streamBudget);
     this.scene.add(this.planet.root);
 
     const collision: CollisionProvider = {
@@ -224,9 +265,16 @@ export class SurfaceRealm implements Realm {
       this.player.attach(collision);
       this.scene.add(this.player.root);
 
-      this.rover = new Rover();
+      this.rover = new Rover(hashCombine(spec.seed, 0x0e7));
       this.rover.attach(collision);
       this.scene.add(this.rover.root);
+
+      // One ship per world, seeded from it — so the hull you fly is a constant
+      // across a session but every save has its own.
+      this.ship = new Starship(hashCombine(spec.seed, 0x5417));
+      this.ship.attach(collision);
+      this.ship.setAtmosphere(spec.atmosphere.thicknessM, spec.atmosphere.present);
+      this.scene.add(this.ship.root);
     }
 
     if (spec.atmosphere.present) {
@@ -257,10 +305,15 @@ export class SurfaceRealm implements Realm {
     };
 
     /* ---- mode transitions ---- */
-    const camLocal = this.mode === 'ground' && this.player ? this.player.state.position : this.fly.position;
+    const camLocal =
+      this.mode === 'ground' && this.player ? this.player.state.position
+      : this.mode === 'ship' && this.ship ? this.ship.position
+      : this.fly.position;
     const altitude = camLocal.length() - this.spec.radiusM - this.planet.heightAt(_dir.copy(camLocal).normalize());
 
-    if (this.mode === 'orbit') {
+    if (this.mode === 'ship' && this.ship) {
+      this.updateShip(dt, ctx, sysCtx, altitude);
+    } else if (this.mode === 'orbit') {
       this.fly.update(dt, input);
       // Speed scales with altitude: a gentle hover close in, a fast cruise
       // out at three radii, with no gear change to think about.
@@ -269,29 +322,9 @@ export class SurfaceRealm implements Realm {
       this.camera.quaternion.copy(this.fly.orientation);
       this.camera.fov = this.fly.camera.fov;
       this.camera.updateProjectionMatrix();
-
-      // Landing: hold the descent low enough and the player takes over on foot.
-      const canLand = this.player && altitude < 220;
-      if (canLand && (input.pressed('interact') || input.pressed('enter') || altitude < 25)) {
-        this.land(ctx);
-      }
       ctx.services.hud?.setVitals({ speed: this.fly.velocity.length(), altitude });
     } else if (this.player) {
-      this.player.update(dt, sysCtx);
-      this.rover?.update(dt, sysCtx);
-      const pc = this.player.camera;
-      this.camera.position.copy(pc.position);
-      this.camera.quaternion.copy(pc.quaternion);
-      this.camera.fov = pc.fov;
-      this.camera.updateProjectionMatrix();
-
-      if (input.pressed('warp')) this.takeOff(ctx);
-      ctx.services.hud?.setVitals({
-        speed: this.player.state.speed,
-        altitude,
-        fuel: this.player.state.fuel,
-        temperature: this.weather?.state().temperature,
-      });
+      this.updateOnFoot(dt, ctx, sysCtx, altitude);
     }
 
     this.camera.aspect = this.aspect;
@@ -343,36 +376,188 @@ export class SurfaceRealm implements Realm {
     this.sky.setOpacity(Math.max(aboveAir, MathUtils.clamp((0.05 - se) / 0.17, 0, 1)));
 
     this.updateHud(ctx, altitude);
+    this.updateAmbience(ctx, altitude);
 
     if (input.pressed('map')) ctx.engine.goto('system', { system: this.system, timeAccel: 1 }, 1.8);
   }
 
-  /** Put the player on the ground beneath the camera and switch control. */
-  private land(ctx: RealmContext): void {
-    if (!this.player || !this.spec) return;
-    const dir = _dir.copy(this.fly.position).normalize();
-    this.landingDir.copy(dir);
-    this.player.spawnAt(dir);
-    this.rover?.placeAt(dir);
-    this.mode = 'ground';
-    ctx.services.hud?.setContext('foot');
-    ctx.services.audio?.setMood('wonder', 0.5);
-    ctx.services.audio?.play('landing_gear');
-    if (!this.titleShown) {
-      this.titleShown = true;
-      ctx.services.hud?.titleCard(this.spec.name, describe(this.spec));
+  /* ═══════════════════════════════════════════════════════════════════════
+     Flying
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  private updateShip(dt: number, ctx: RealmContext, sysCtx: SystemContext, altitude: number): void {
+    const ship = this.ship!;
+    const input = ctx.input;
+    ship.update(dt, sysCtx);
+
+    ship.cameraPose(dt, this.shipCamPos, this.shipCamQuat, this.shipView);
+    this.camera.position.copy(this.shipCamPos);
+    this.camera.quaternion.copy(this.shipCamQuat);
+    this.camera.fov = 62 + ship.fovBoost();
+    this.camera.updateProjectionMatrix();
+
+    if (input.pressed('toggleView')) this.shipView = this.shipView === 'third' ? 'first' : 'third';
+
+    const hud = ctx.services.hud;
+    hud?.setContext(altitude > 6000 ? 'space' : 'vehicle');
+    hud?.setVitals({
+      speed: ship.speed(),
+      altitude,
+      integrity: ship.integrity(),
+      temperature: this.weather?.state().temperature,
+    });
+
+    /* ---- disembark ---- */
+    if (ship.isLanded()) {
+      if (!this.titleShown && this.spec) {
+        this.titleShown = true;
+        ctx.services.audio?.setMood('wonder', 0.5);
+        ctx.services.hud?.titleCard(this.spec.name, describe(this.spec));
+      }
+      hud?.setPrompt('step outside');
+      if (input.pressed('interact') || input.pressed('enter')) this.disembark(ctx);
+    } else if (altitude < 400 && ship.speed() < 45) {
+      hud?.setPrompt('gear down — descend to set down', 'S');
+    } else {
+      hud?.setPrompt(null);
+    }
+
+    /* ---- leaving the world ---- */
+    const af = ship.altitudeFactor();
+    if (input.pressed('warp') && this.system) {
+      if (af > 0.85) ship.warpTo(this.system);
+      else hud?.toast('Too deep in the well — climb clear of the atmosphere', 2.6);
+    }
+    const charge = ship.warpProgress();
+    if (charge > 0.001) {
+      hud?.setPrompt(`warp drive ${(charge * 100).toFixed(0)}%`, 'J');
+      hud?.setVeil(charge * 0.35);
+      if (charge < 0.06) ctx.services.audio?.play('warp_charge');
+    }
+    if (ship.isWarping() && !this.departing) {
+      this.departing = true;
+      ctx.services.audio?.play('warp_jump');
+      ctx.engine.goto('system', { system: this.system, simTime: this.simTime, fromPlanet: this.spec }, 2.0);
+    }
+    // Climbing out without the drive still gets you back to the system view.
+    if (!this.departing && this.timeInRealm > 3 && altitude > this.spec!.radiusM * 3.4 && this.system) {
+      this.departing = true;
+      ctx.engine.goto('system', { system: this.system, simTime: this.simTime, fromPlanet: this.spec }, 1.8);
     }
   }
 
-  private takeOff(ctx: RealmContext): void {
-    if (!this.spec) return;
-    const p = this.player?.state.position ?? this.fly.position;
-    this.fly.position.copy(p).normalize().multiplyScalar(this.spec.radiusM + 3000);
-    this.fly.velocity.set(0, 0, 0);
-    this.fly.lookAt(new Vector3(0, 0, 0));
-    this.mode = 'orbit';
-    ctx.services.hud?.setContext('orbit');
+  /* ═══════════════════════════════════════════════════════════════════════
+     On foot
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  private updateOnFoot(dt: number, ctx: RealmContext, sysCtx: SystemContext, altitude: number): void {
+    const player = this.player!;
+    const input = ctx.input;
+    player.update(dt, sysCtx);
+    this.rover?.update(dt, sysCtx);
+    // The ship still simulates while you are out of it: its legs settle onto
+    // terrain that streams in after you have already walked away from it.
+    this.ship?.update(dt, sysCtx);
+
+    const pc = player.camera;
+    this.camera.position.copy(pc.position);
+    this.camera.quaternion.copy(pc.quaternion);
+    this.camera.fov = pc.fov;
+    this.camera.updateProjectionMatrix();
+
+    const hud = ctx.services.hud;
+    const riding = player.state.vehicle;
+
+    /* ---- boarding ---- */
+    if (riding) {
+      hud?.setContext('vehicle');
+      hud?.setVitals({
+        speed: riding.speed(),
+        altitude,
+        integrity: riding.integrity(),
+        temperature: this.weather?.state().temperature,
+      });
+      hud?.setPrompt('get out');
+      if (input.pressed('interact')) {
+        player.board(null);
+        // Step out beside the vehicle rather than inside it.
+        const up = _dir.copy(riding.position).normalize();
+        const side = _tmp.set(1, 0, 0).applyQuaternion(riding.root.quaternion).multiplyScalar(3.2);
+        player.state.position.copy(riding.position).add(side).addScaledVector(up, 0.5);
+        ctx.services.audio?.play('landing_gear');
+      }
+      return;
+    }
+
+    hud?.setContext('foot');
+    hud?.setVitals({
+      speed: player.state.speed,
+      altitude,
+      fuel: player.state.fuel,
+      temperature: this.weather?.state().temperature,
+    });
+
+    const p = player.state.position;
+    const nearRover = this.rover && p.distanceTo(this.rover.position) < BOARD_RANGE;
+    const nearShip = this.ship && p.distanceTo(this.ship.position) < BOARD_RANGE + 6;
+
+    if (nearShip) {
+      hud?.setPrompt('board the ship');
+      if (input.pressed('interact')) this.boardShip(ctx);
+    } else if (nearRover) {
+      hud?.setPrompt('drive');
+      if (input.pressed('interact')) {
+        player.board(this.rover);
+        ctx.services.audio?.play('engine_start');
+      }
+    } else if (this.ship) {
+      hud?.setPrompt('call the ship', 'J');
+      // J calls the ship down to you from anywhere: walking home across four
+      // kilometres of tundra is not the fantasy.
+      if (input.pressed('warp')) {
+        this.ship.requestLanding(_dir.copy(p).normalize());
+        if (this.ship.isLanded()) this.ship.requestTakeoff();
+        hud?.toast('Ship inbound', 2.4);
+      }
+    } else {
+      hud?.setPrompt(null);
+    }
+  }
+
+  /** Climb in, and take the ship off the ground if it is sitting on it. */
+  private boardShip(ctx: RealmContext): void {
+    if (!this.ship || !this.player) return;
+    this.mode = 'ship';
+    this.player.board(null);
+    this.ship.setDriver(true);
+    this.shipView = 'third';
+    ctx.services.hud?.setContext('vehicle');
     ctx.services.audio?.play('engine_start');
+    ctx.services.audio?.setMood('drift', 0.5);
+  }
+
+  /** Put the player on the ground beside the ship and hand over control. */
+  private disembark(ctx: RealmContext): void {
+    if (!this.player || !this.spec || !this.ship) return;
+    // Step out to one side of the hull, then put the feet back on the ground:
+    // the offset is a chord across the sphere and would otherwise leave the
+    // player standing seven metres above or below the terrain.
+    const side = _tmp.set(1, 0, 0).applyQuaternion(this.ship.root.quaternion).multiplyScalar(7);
+    const dir = _dir.copy(this.ship.position).add(side).normalize();
+    this.landingDir.copy(dir);
+    this.player.spawnAt(dir, Math.atan2(side.z, side.x));
+
+    // The rover comes down with the ship, parked a little further out.
+    if (this.rover && this.rover.position.distanceTo(this.ship.position) > 3000) {
+      this.rover.placeAt(
+        _tmp2.copy(this.ship.position).addScaledVector(side, 2.4).normalize(),
+        0.8
+      );
+    }
+    this.ship.setDriver(false);
+    this.mode = 'ground';
+    ctx.services.hud?.setContext('foot');
+    ctx.services.audio?.setMood('wonder', 0.5);
   }
 
   /**
@@ -474,6 +659,53 @@ export class SurfaceRealm implements Realm {
     this.ambient.intensity = (0.15 + air * 0.85) * intensity * Math.PI * 0.32 * (nightFloor + (1 - nightFloor) * day);
   }
 
+  /**
+   * What the world sounds like from here.
+   *
+   * Four beds, cross-faded by where the player is rather than by a trigger
+   * volume: vacuum above the air, wind on the surface, surf near the water,
+   * and a city when you are inside one. The intensity is the mix, so walking
+   * out of a city is a fade rather than a cut.
+   */
+  private updateAmbience(ctx: RealmContext, altitude: number): void {
+    const audio = ctx.services.audio;
+    if (!audio || !this.spec) return;
+    const air = this.spec.atmosphere;
+    // Above most of the air there is nothing to carry sound.
+    const airFrac = air.present
+      ? MathUtils.clamp(1 - altitude / Math.max(1, air.thicknessM * 0.55), 0, 1)
+      : 0;
+    if (airFrac < 0.08) {
+      audio.setAmbience('vacuum', 0.55);
+      return;
+    }
+
+    const dir = _dir.copy(this.camera.position).normalize();
+    const near = this.civ?.nearest(dir);
+    if (near && altitude < 900) {
+      audio.setAmbience('city', airFrac * (near.kind === 'megacity' || near.kind === 'city' ? 0.7 : 0.4));
+      return;
+    }
+
+    // Standing near the waterline: the sea is the loudest thing on any coast.
+    const sea = this.planet?.seaLevelRadius() ?? 0;
+    if (sea > 0 && altitude < 240) {
+      const above = this.camera.position.length() - sea;
+      if (above < 90) {
+        audio.setAmbience('surf', airFrac * MathUtils.clamp(1 - above / 90, 0.25, 1) * 0.8);
+        return;
+      }
+    }
+
+    const w = this.weather?.state();
+    if (w && w.precipitation > 0.25 && w.precipitationType === 'rain') {
+      audio.setAmbience('rain', airFrac * w.precipitation);
+      return;
+    }
+    const windy = w ? MathUtils.clamp(w.wind.length() / 22, 0.2, 1) : 0.4;
+    audio.setAmbience(this.spec.life === 'flora' || this.spec.life === 'fauna' ? 'forest' : 'wind', airFrac * windy * 0.75);
+  }
+
   private updateHud(ctx: RealmContext, altitude: number): void {
     const hud = ctx.services.hud;
     if (!hud || !this.spec) return;
@@ -506,6 +738,18 @@ export class SurfaceRealm implements Realm {
     hud.setLocation(this.spec.name, sub);
   }
 
+  /**
+   * Harness hook: let terrain, scatter and cities stream as fast as they can.
+   * Trades frame rate for a finished world, which is the right trade when
+   * nobody is playing and something is about to take a photograph.
+   */
+  setStreamBudget(msPerFrame: number): void {
+    // Sticky: the harness sets this before any world exists, and every planet
+    // built afterwards has to inherit it or the request quietly does nothing.
+    this.streamBudget = msPerFrame;
+    (this.planet as any)?.setBuildBudget?.(msPerFrame);
+  }
+
   /** Diagnostic: what the planet stack is actually doing. */
   setPlainTerrain(v: boolean): void {
     (this.planet as any)?.setPlainTerrain?.(v);
@@ -534,6 +778,14 @@ export class SurfaceRealm implements Realm {
             speed: Number(this.player.state.velocity.length().toFixed(2)),
           }
         : null,
+      ship: this.ship
+        ? {
+            alt: Math.round(this.ship.altitude()),
+            landed: this.ship.isLanded(),
+            speed: Number(this.ship.speed().toFixed(1)),
+            integrity: Number(this.ship.integrity().toFixed(2)),
+          }
+        : null,
       camDist: this.camera.position.length(),
       radius: this.spec?.radiusM,
     };
@@ -556,6 +808,7 @@ export class SurfaceRealm implements Realm {
     (this.sun.shadow as any).map = null;
     this.sky.setQuality(q);
     this.planet?.setQuality(q);
+    if (this.streamBudget > 0) (this.planet as any)?.setBuildBudget?.(this.streamBudget);
     this.scatter?.setQuality(q);
     this.wildlife?.setQuality(q);
     this.weather?.setQuality(q);
@@ -593,20 +846,41 @@ export class SurfaceRealm implements Realm {
     // Ground shots: pick a direction that suits the subject, force the terrain
     // to stream in, then stand the player on it.
     const dir = await this.pickGroundSpot(mode);
-    await this.planet.ensureDetail(dir, 2500);
+    // Race the stream against a deadline. A patch on a world this size costs
+    // real work to generate, and the pin asks for a full LOD chain down to
+    // metre scale — on a slow machine that is minutes, and an `await` that
+    // never returns is indistinguishable from a crash to whatever is driving
+    // us. Take the terrain that arrived and pose the shot anyway: a coarse
+    // landscape is a usable picture, a black screen is not.
+    await Promise.race([
+      this.planet.ensureDetail(dir, 2500),
+      new Promise<void>((r) => setTimeout(r, o.detailTimeoutMs ?? 45000)),
+    ]);
     // Fill the scatter around the landing site before the shot rather than
     // streaming it in over the next minute.
     this.scatter?.setViewer(_tmp.copy(dir).multiplyScalar(R + this.planet.heightAt(dir)));
-    // The draw radius holds about thirty cells; priming ten times that built
-    // a few thousand instanced meshes and made the frame uncapturable.
-    (this.scatter as any)?.prime?.(48);
+    // The draw radius holds about thirty cells; priming ten times that built a
+    // few thousand instanced meshes and made the frame uncapturable. Forty-eight
+    // covers the near field with headroom, and the wall-clock bound is the
+    // backstop for a world whose terrain is expensive enough that even that
+    // many cells would stall the page.
+    (this.scatter as any)?.prime?.(48, 6000);
 
     if (this.player) {
-      this.player.spawnAt(dir, 0.6);
+      // Face the subject. A fixed heading pointed the camera into the scenery
+      // as often as at the thing the shot is named after.
+      const heading = this.lookAtSite ? headingFromTo(dir, this.lookAtSite) : 0.6;
+      this.player.spawnAt(dir, heading);
       this.player.setView(mode === 'ground' ? 'first' : 'third');
       this.mode = 'ground';
+      this.player.board(null);
       ctxHud(this)?.setContext('foot');
-      this.rover?.placeAt(dir);
+      // Park the ship and the rover where the player set down, so a surface
+      // shot has something human-made in it to give the landscape a scale.
+      // Park them off to the side of the shot, not down the middle of it.
+      const tangent = new Vector3(0, 1, 0).cross(dir).normalize();
+      this.ship?.placeAt(_tmp2.copy(dir).addScaledVector(tangent, 26 / R).normalize(), heading + 1.9);
+      this.rover?.placeAt(_tmp2.copy(dir).addScaledVector(tangent, 9 / R).normalize(), heading + 0.7);
     } else {
       this.mode = 'orbit';
       const h = this.planet.heightAt(dir);
@@ -618,7 +892,9 @@ export class SurfaceRealm implements Realm {
     // terrain its form; a sun overhead flattens the best landscape ever made.
     const elevDeg =
       mode === 'night' ? -14 :
-      mode === 'city' ? 4 :
+      // Low enough to rake the façades and throw long shadows down the
+      // streets, high enough that the place is not a silhouette.
+      mode === 'city' ? 11 :
       mode === 'ocean' ? 9 :
       mode === 'vista' ? 13 : 26;
     this.frameSunAt(dir, (elevDeg * Math.PI) / 180);
@@ -631,7 +907,11 @@ export class SurfaceRealm implements Realm {
    */
   private frameSunAt(dir: Vector3, wantElev: number): void {
     if (!this.spec) return;
-    const up = _tmp.copy(dir).normalize();
+    // A local, not a shared scratch vector: `updateSun` writes `_tmp` when it
+    // snaps the shadow camera to the texel grid, so holding `_tmp` across the
+    // call replaced this up vector with a planet-scale position on the first
+    // iteration and every ground shot has been scanning against garbage.
+    const up = dir.clone().normalize();
     const day = this.spec.rotationS;
     const t0 = this.simTime;
     let best = t0;
@@ -658,7 +938,8 @@ export class SurfaceRealm implements Realm {
    */
   private frameSun(want: number): void {
     if (!this.spec) return;
-    const camDir = _tmp.copy(this.fly.position).normalize();
+    // Local for the same reason as `frameSunAt`: nothing survives `updateSun`.
+    const camDir = this.fly.position.clone().normalize();
     const day = this.spec.rotationS;
     const t0 = this.simTime;
     let best = t0;
@@ -682,12 +963,21 @@ export class SurfaceRealm implements Realm {
       const s = this.civ.settlements();
       if (s.length) {
         const best = s.reduce((a, b) => (b.population > a.population ? b : a));
-        // Stand outside the city looking in, so the skyline reads.
+        // Stand outside the city looking in, so the skyline reads against sky
+        // rather than against more city. Just over one radius out: far enough
+        // for the whole silhouette, close enough that the towers still have
+        // some size on screen.
+        this.lookAtSite = best.direction.clone();
         const d = best.direction.clone();
         const tangent = new Vector3(0, 1, 0).cross(d).normalize();
-        return d.addScaledVector(tangent, (best.radius * 1.9) / R).normalize();
+        // Just inside the edge, looking toward the middle. Standing right out
+        // in the fields puts the whole place on the horizon at four pixels
+        // tall; from the last block in you get near buildings for scale and
+        // the core behind them, which is what a skyline actually is.
+        return d.addScaledVector(tangent, (best.radius * 0.82) / R).normalize();
       }
     }
+    this.lookAtSite = null;
     // Two passes. A coarse golden-angle sweep gets the altitude band and the
     // local relief from cheap height lookups, and only the survivors pay for a
     // full surface sample (five height evaluations each) to check that the
@@ -792,6 +1082,11 @@ export class SurfaceRealm implements Realm {
       this.rover.dispose();
       this.rover = null;
     }
+    if (this.ship) {
+      this.scene.remove(this.ship.root);
+      this.ship.dispose();
+      this.ship = null;
+    }
     if (this.planet) {
       this.scene.remove(this.planet.root);
       this.planet.dispose();
@@ -805,6 +1100,22 @@ export class SurfaceRealm implements Realm {
   }
 }
 
+/**
+ * Heading at `from` that points along the great circle toward `to`, in the same
+ * convention `Player.spawnAt` uses: zero is the reference tangent, positive is
+ * a rotation about the local up.
+ */
+function headingFromTo(from: Vector3, to: Vector3): number {
+  const up = _hUp.copy(from).normalize();
+  const ref = Math.abs(up.y) > 0.94 ? _hRef.set(1, 0, 0) : _hRef.set(0, 1, 0);
+  const base = _hBase.crossVectors(ref, up).normalize();
+  const right = _hRight.crossVectors(up, base).normalize();
+  const toward = _hTo.copy(to).addScaledVector(up, -to.dot(up));
+  if (toward.lengthSq() < 1e-12) return 0;
+  toward.normalize();
+  return Math.atan2(toward.dot(right), toward.dot(base));
+}
+
 /** The HUD lives on the engine's service bag; debugView has no ctx of its own. */
 function ctxHud(realm: any): { setContext(m: string): void } | null {
   return realm.hudRef ?? null;
@@ -816,7 +1127,13 @@ const SHADOW_SPAN = 130;
 const _dir = new Vector3();
 const _tmp = new Vector3();
 const _wind = new Vector3();
+const _tmp2 = new Vector3();
 const _sunPos = new Vector3();
+const _hUp = new Vector3();
+const _hRef = new Vector3();
+const _hBase = new Vector3();
+const _hRight = new Vector3();
+const _hTo = new Vector3();
 
 /** Insolation relative to Earth, gently compressed so nothing blows out. */
 function sunIntensity(p: PlanetSpec, s: StarSystemSpec | null): number {

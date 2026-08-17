@@ -113,9 +113,17 @@ export class Player implements IPlayer {
   }
 
   board(vehicle: IVehicle | null): void {
+    const leaving = this.state.vehicle;
+    if (leaving && leaving !== vehicle) leaving.setDriver(false);
     this.state.vehicle = vehicle;
     vehicle?.setDriver(true);
     this.mesh.root.visible = !vehicle;
+    // Stepping out inherits the vehicle's momentum, minus the part that would
+    // launch you: you hop off a moving rover, you do not get fired out of it.
+    if (!vehicle && leaving) {
+      this.state.velocity.copy(leaving.velocity).multiplyScalar(0.35);
+      this.rig.reset();
+    }
   }
 
   shake(amount: number, duration: number): void {
@@ -128,6 +136,10 @@ export class Player implements IPlayer {
 
   update(dt: number, ctx: SystemContext): void {
     if (!this.collision) return;
+    if (this.state.vehicle) {
+      this.updateRiding(dt, ctx);
+      return;
+    }
     const input = ctx.input;
     const g = this.collision.gravity;
     const p = this.state.position;
@@ -360,6 +372,74 @@ export class Player implements IPlayer {
     this.mesh.setViewBlend(this.state.view === 'first' ? 1 : 0);
   }
 
+  /**
+   * Riding. The controller stops simulating a body and becomes the camera
+   * holder: the vehicle owns the physics, the rig owns the view, and look input
+   * still swings the head independently of where the vehicle is pointing —
+   * which is the entire reason a chase camera on a car feels different from one
+   * bolted to the bumper.
+   */
+  private updateRiding(dt: number, ctx: SystemContext): void {
+    const veh = this.state.vehicle!;
+    const input = ctx.input;
+
+    // The seat, in world space. `root` carries the vehicle's own orientation.
+    veh.root.updateMatrixWorld();
+    const seat = _o.copy(veh.seatOffset).applyQuaternion(veh.root.quaternion).add(veh.root.position);
+    this.state.position.copy(seat);
+    this.state.velocity.copy(veh.velocity);
+    this.state.speed = veh.velocity.length();
+    this.state.grounded = true;
+    this.state.swimming = false;
+
+    // Up is the vehicle's up, so driving across a hemisphere never tips the
+    // horizon and cornering visibly banks the view.
+    this.up.set(0, 1, 0).applyQuaternion(veh.root.quaternion).normalize();
+
+    if (this.controlEnabled) {
+      _q.setFromAxisAngle(this.up, -input.look.x);
+      this.aim.applyQuaternion(_q);
+      this.pitch = clamp(this.pitch - input.look.y, -1.1, 1.1);
+      if (input.wheel !== 0) this.rig.zoom(input.wheel * 0.35);
+      if (input.pinch !== 0) this.rig.zoom(-input.pinch * 1.4);
+      if (input.pressed('toggleView')) this.toggleView();
+    }
+    // Re-orthogonalise against the vehicle's up, and recentre slowly behind it
+    // so letting go of the stick returns the view to where you are going.
+    this.aim.addScaledVector(this.up, -this.aim.dot(this.up));
+    if (this.aim.lengthSq() < 1e-8) this.aim.set(0, 0, -1).applyQuaternion(veh.root.quaternion);
+    this.aim.normalize();
+    const vehFwd = _p2.set(0, 0, -1).applyQuaternion(veh.root.quaternion);
+    vehFwd.addScaledVector(this.up, -vehFwd.dot(this.up)).normalize();
+    if (Math.abs(input.look.x) < 1e-4) {
+      this.aim.lerp(vehFwd, 1 - Math.pow(0.35, dt)).normalize();
+    }
+
+    this.rig.setPrefs({
+      fovDeg: ctx.services.prefs?.fovDeg ?? 68,
+      headBob: ctx.services.prefs?.headBob ?? true,
+    });
+    this.rig.update(dt, {
+      position: this.state.position,
+      up: this.up,
+      aimForward: this.aim,
+      aimPitch: this.pitch,
+      // Bank the view with the vehicle: the roll is the difference between the
+      // vehicle's own right and the flat tangent right.
+      roll: 0,
+      velocity: this.state.velocity,
+      eyeHeight: 0.35,
+      sprint: 0,
+      moving: 1,
+      grounded: true,
+      swimming: false,
+      riding: true,
+      refSpeed: 26,
+      renderOrigin: _zero,
+    });
+    this.mesh.root.visible = false;
+  }
+
   dispose(): void {
     this.mesh.dispose();
   }
@@ -379,5 +459,7 @@ const _k = new Vector3();
 const _l = new Vector3();
 const _m = new Vector3();
 const _n = new Vector3();
+const _o = new Vector3();
+const _p2 = new Vector3();
 const _q = new Quaternion();
 const _zero = new Vector3(0, 0, 0);
