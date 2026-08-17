@@ -881,8 +881,10 @@ void main(){
     float r = abs(vFuv.y - 0.5) * 2.0;
     float band = 1.0 - smoothstep(0.0, 1.0, r);
     float flow = 0.6 + 0.4 * sin(vFuv.x * 40.0 - uTime * 3.0);
-    col = uNeon * band * flow * vFacade.z * 2.0;
-    alpha = band;
+    // Street lighting lives on this branch too, so it has to know about the
+    // time of day: a lamp burning at noon is the fastest way to look fake.
+    col = uNeon * band * flow * vFacade.z * 2.0 * (0.12 + 0.88 * uNight);
+    alpha = band * (0.12 + 0.88 * uNight);
   }
 
   // Holograms fade out in daylight rather than vanishing.

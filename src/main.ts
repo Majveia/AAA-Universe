@@ -126,6 +126,20 @@ async function boot(): Promise<void> {
     ready: true,
     goto: (id: RealmId, payload?: any) => engine.goto(id, payload, 0.6),
     setRealm: (id: RealmId, payload?: any) => engine.setRealm(id, payload),
+    /**
+     * Jump straight to a named place. `teleport('surface', { mode: 'city' })`
+     * lands on the best settlement on the current world; `teleport('system')`
+     * puts you back in the orrery. The screenshot harness and the visual
+     * critique loop both drive the game through this.
+     */
+    teleport: async (id: RealmId, opts: any = {}) => {
+      await engine.setRealm(id, opts.payload);
+      if (id === 'surface') await surface.debugView(opts);
+      else if (id === 'system') system.debugView(opts);
+      else if (id === 'galaxy') await galaxy.debugView(opts);
+      else if (id === 'cosmos') await cosmos.debugView(opts);
+      return engine.stats;
+    },
     setTier: (t: any) => engine.adaptive.setManual(t),
     capture: () => engine.capture(),
     stats: () => ({ ...engine.stats, tier: engine.adaptive.tier, realm: engine.current?.id }),

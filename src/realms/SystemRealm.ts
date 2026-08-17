@@ -21,6 +21,7 @@
 import {
   AdditiveBlending,
   AmbientLight,
+  Group,
   BufferAttribute,
   BufferGeometry,
   Color,
@@ -29,6 +30,7 @@ import {
   MathUtils,
   Points,
   PointsMaterial,
+  Quaternion,
   Vector2,
   Scene,
   ShaderMaterial,
@@ -42,9 +44,11 @@ import { BodyRenderer } from './BodyRenderer';
 import { orbitPolyline, orbitalPosition } from './Orbits';
 import { AU, type PlanetSpec, type StarSystemSpec } from '../universe/Types';
 import type { HudTarget } from '../api/Contracts';
-import { Rng, hashCombine } from '../core/Rand';
+import { hashCombine } from '../core/Rand';
 import { makeGalaxy } from '../universe/Universe';
 import { Skybox } from '../galaxy/Skybox';
+import { buildShipMesh, type ShipParts } from '../entities/ShipMesh';
+import { Rng } from '../core/Rand';
 
 
 /**
@@ -137,6 +141,20 @@ export class SystemRealm implements Realm {
   private approachTarget: BodyEntry | null = null;
   private sky = new Skybox();
 
+  /**
+   * The ship, flown in third person. The fly camera is the *rig*, not the
+   * vehicle: the hull is hung in front of it and lags behind its rotation, so
+   * a turn shows you the ship banking into it. Without something with a
+   * silhouette in frame, interplanetary flight has no sense of motion at all —
+   * everything is too far away to parallax.
+   */
+  private ship: ShipParts | null = null;
+  private shipGroup = new Group();
+  private shipLag = new Quaternion();
+  private shipBank = 0;
+  /** 0–1 presence. The hull is only in frame while you are actually flying. */
+  private shipShow = 0;
+
   constructor() {
     this.camera = this.fly.camera;
     this.scene.background = new Color(0x000000);
@@ -145,6 +163,13 @@ export class SystemRealm implements Realm {
     this.scene.add(new AmbientLight(0x0a0e18, 0.25));
     this.scene.add(this.sky.root);
     this.scene.add(this.star.root);
+
+    this.ship = buildShipMesh(new Rng(0x5417));
+    this.shipGroup.add(this.ship.root);
+    this.ship.setGear(0);
+    this.ship.setLights(true);
+    this.shipGroup.renderOrder = 30;
+    this.scene.add(this.shipGroup);
   }
 
   async enter(ctx: RealmContext, payload?: any): Promise<void> {
@@ -316,6 +341,7 @@ export class SystemRealm implements Realm {
     this.fly.setAspect(ctx.engine.aspect);
 
     this.updateBodies(dt);
+    this.updateShip(dt, input);
 
     /* ---- star ---- */
     const starLocal = this.toLocal(new Vector3(0, 0, 0), new Vector3());
@@ -383,6 +409,53 @@ export class SystemRealm implements Realm {
     }
 
     if (input.pressed('map')) ctx.engine.goto('galaxy', undefined, 2.0);
+  }
+
+  /**
+   * Hang the ship off the camera.
+   *
+   * The camera sits at the scene origin (floating origin), so the hull lives at
+   * a fixed local offset. Its orientation trails the camera's, and the residual
+   * yaw is fed into a roll — which is the whole trick: the ship visibly *leans*
+   * into a turn a moment after you make it, and that lag is the only thing in
+   * an empty sky that tells you you are moving.
+   */
+  private updateShip(dt: number, input: RealmContext['input']): void {
+    const ship = this.ship;
+    if (!ship) return;
+
+    // The orrery is also the navigation view, and a hull parked across the
+    // middle of it is in the way. So the ship is only present while you are
+    // flying: it slides into frame on the throttle and leaves when you stop.
+    const flying = input.move.lengthSq() > 1e-4 || input.isDown('boost') || input.isDown('brake');
+    this.shipShow = MathUtils.lerp(this.shipShow, flying ? 1 : 0, 1 - Math.pow(flying ? 0.02 : 0.25, dt));
+    this.shipGroup.visible = this.shipShow > 0.01;
+    if (!this.shipGroup.visible) return;
+
+    const k = 1 - Math.pow(0.0004, dt);
+    _prevQ.copy(this.shipLag);
+    this.shipLag.slerp(this.fly.orientation, k);
+
+    // Residual yaw between the camera and the lagging hull → bank angle.
+    _dq.copy(_prevQ).invert().multiply(this.shipLag);
+    const yawRate = Math.abs(_dq.w) > 0.9999 ? 0 : 2 * Math.atan2(_dq.y, _dq.w);
+    this.shipBank = MathUtils.lerp(this.shipBank, MathUtils.clamp(-yawRate / Math.max(1e-4, dt) * 0.45, -0.9, 0.9), 1 - Math.pow(0.02, dt));
+
+    this.shipGroup.quaternion.copy(this.shipLag);
+    _bankQ.setFromAxisAngle(_zAxis, this.shipBank);
+    this.shipGroup.quaternion.multiply(_bankQ);
+
+    // Slung well below and ahead of the eye: far enough that the hull reads as
+    // a silhouette against the system rather than as a wall, low enough that
+    // everything you are flying toward stays above it. It rises into frame as
+    // it appears rather than popping.
+    _shipOff.set(0, -6.5 + this.shipShow * 2.0, -26).applyQuaternion(this.shipLag);
+    this.shipGroup.position.copy(this.camera.position).add(_shipOff);
+    this.shipGroup.scale.setScalar(0.55 + this.shipShow * 0.45);
+
+    const throttle = MathUtils.clamp(input.move.y, 0, 1) + (input.isDown('boost') ? 0.6 : 0);
+    ship.setThrust(MathUtils.clamp(throttle, 0, 1));
+    ship.update(this.timeInRealm);
   }
 
   /** Recompute every body's absolute position and refresh its renderer LOD. */
@@ -518,12 +591,19 @@ export class SystemRealm implements Realm {
     this.sky.dispose();
     this.teardown();
     this.star.dispose();
+    this.ship?.dispose();
+    this.ship = null;
   }
 }
 
 const _tmpA = new Vector3();
 const _sz = new Vector2();
 const _v0 = new Vector3();
+const _shipOff = new Vector3();
+const _zAxis = new Vector3(0, 0, 1);
+const _prevQ = new Quaternion();
+const _dq = new Quaternion();
+const _bankQ = new Quaternion();
 
 function describeStar(s: StarSystemSpec): string {
   const st = s.stars[0];
