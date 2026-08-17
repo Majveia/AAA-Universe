@@ -859,10 +859,12 @@ export class SurfaceRealm implements Realm {
     // Fill the scatter around the landing site before the shot rather than
     // streaming it in over the next minute.
     this.scatter?.setViewer(_tmp.copy(dir).multiplyScalar(R + this.planet.heightAt(dir)));
-    // Enough cells to fill the near field of a shot; the rest streams in during
-    // the settle. Asking for hundreds here blocks for minutes and buys nothing
-    // a camera can see.
-    (this.scatter as any)?.prime?.(72, 6000);
+    // The draw radius holds about thirty cells; priming ten times that built a
+    // few thousand instanced meshes and made the frame uncapturable. Forty-eight
+    // covers the near field with headroom, and the wall-clock bound is the
+    // backstop for a world whose terrain is expensive enough that even that
+    // many cells would stall the page.
+    (this.scatter as any)?.prime?.(48, 6000);
 
     if (this.player) {
       // Face the subject. A fixed heading pointed the camera into the scenery
