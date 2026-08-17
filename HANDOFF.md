@@ -1,9 +1,8 @@
 # ÆON — handoff
 
-State of the project as of commit `31d3b79` on branch
-`claude/aaa-3d-universe-threejs-x9kbrt`. Read `CLAUDE.md` first for the
-engineering conventions; this document is only about *where things actually
-stand* and what will bite you.
+State of the project as of the merge of `claude/project-completion-shipping-du9z7k`.
+Read `CLAUDE.md` first for the engineering conventions; this document is only
+about *where things actually stand* and what will bite you.
 
 ---
 
@@ -19,6 +18,15 @@ node tools/perf.mjs --view orbit          # orbit | ground | system | galaxy | c
 
 # what it actually looks like — minutes per shot, see §2
 node tools/shoot.mjs --tier low --width 640 --height 360 --shots planet-orbit
+
+# does the city generator still produce cities — 4 seconds, no browser
+node tools/civcheck.mjs
+
+# is a frame slow or is the page hung — 30 seconds
+node tools/probe.mjs --tier low
+
+# watch one city stream in, phase by phase
+node tools/citywatch.mjs --tier medium --fast --post
 ```
 
 `window.__aeon` is the debug bridge the harnesses drive. The useful ones:
@@ -32,6 +40,9 @@ node tools/shoot.mjs --tier low --width 640 --height 360 --shots planet-orbit
 | `planetLayer(name, bool)` | isolate `terrain` `ocean` `atmosphere` `clouds` |
 | `plainTerrain(bool)` | swap terrain for MeshNormalMaterial |
 | `setPost(bool)` | bypass the whole post chain |
+| `setShadows(bool)` | shadows off — the single biggest ground-shot cost |
+| `stream(ms)` | terrain build budget per frame; raise it for offline capture |
+| `teleport(realm, opts)` | switch realm *and* pose the shot in one call |
 | `stats()` | fps, draw calls, tier, realm |
 
 Keep these working. Every hard bug in this project was found by bisecting with
@@ -72,39 +83,47 @@ Each of these has been seen in a capture, not merely compiled.
 | **Planet from orbit** | Terrain with continents, ocean with depth-graded colour, atmospheric limb, cloud deck. |
 | **Deep sky** | Starfield with Planck-locus colour, galaxy band with dust lanes, nebulae, local star disc. Fades under daylight. |
 | **World selection** | Lands on a terran world with an ocean, standing ~112 m above the waterline. |
+| **Surface, on foot** | Terrain, 150 k scatter instances, the starship landed on its gear and the rover parked beside it, all in one frame. |
+| **Cities** | Generate and install end to end: sites placed, heightfield graded, layout built, geometry emitted (6 meshes, 59 k vertices). Verified by numbers and by `civcheck`, **not** yet by a clean photograph — see §4.1. |
+| **Starship** | Flies, lands on the gear, takes impact damage, boards and disembarks. |
 
 ---
 
 ## 4. What is broken — start here
 
-### 4.1 Surface shots time out (live regression, introduced by `cae0911`)
+### 4.1 A ground-level city has never been photographed cleanly
 
-`surface-vista` and `surface-first` now exceed the 180 s screenshot timeout.
-Before the scatter fix they captured fine.
+The city itself is fine — this is a terrain-streaming problem and it is the one
+thing left blocking the visual review of civilization.
 
-Cause is almost certainly draw-call count. `ScatterSystem` creates **one
-InstancedMesh per (cell, species)**. With the corrected cell size (~96 m) the
-draw radius holds ~29 cells, and `SurfaceRealm.debugView` calls `prime(320)`,
-which builds far more than that synchronously. 320 cells × ~5 species ≈ 1600
-draw calls.
+A terrain patch on a 12,000 km world costs roughly **200 ms** to generate on
+SwiftShader. Standing in a city the LOD wants ~1,580 patches and a run reaches
+~450 before it has to end, so the skyline sits partly *below* ground that has
+not refined. What you see is lamp posts poking through a smooth plain.
 
-Fixes worth trying, in order:
-1. Drop `prime(320)` to `prime(40)` — the draw radius only needs ~29 cells.
-2. Merge all species of one cell into a single InstancedMesh keyed by a
-   per-instance species index, so a cell is 1 draw call rather than 5.
-3. Confirm with `planetDebug().scatter` — it reports `cells`, `meshes`,
-   `instances`, `cellSizeM`, `pending`.
+Everything else about the city is confirmed by numbers rather than by picture:
 
-### 4.2 Surface still does not look good
+- `civcheck` transforms emitted vertices back to planet-local through the
+  settlement's own basis and asserts they land on the surface at the site.
+- `planetDebug().civ` reports `nearestM`, `nearestRadius`, `readyMeshes` and
+  `readyVerts` — the numbers that separate "the camera is nowhere near it" from
+  "it is right there and the geometry is wrong".
+- A settlement now pins terrain detail over its own footprint as it starts
+  emitting, so on hardware that can stream it, a city cannot be buried.
 
-Even before the timeout, the ground was wrong. The substrate work in `cae0911`
-is committed but **has never been seen** — the first run after it hit the
-`patch` reserved-word error, and the second timed out. So:
+**On a machine with a GPU this should just work.** That is the first thing to
+check, and it is cheap: `node tools/citywatch.mjs --tier high`.
 
-- Terrain substrate variation (40 m / 150 m bands, clumped vegetation, pebble
-  speckle): **written, compiles, unverified.**
-- Sky brightness from the ground (`uScatterGain` 0.38 → 1.0): **unverified.**
-- Scatter appearing at all: **unverified.**
+### 4.2 Surface look, still unjudged
+
+The substrate work in `cae0911` has now been *seen* but not judged: the vista
+capture shows terrain, scatter and both vehicles, on a snow world under heavy
+overcast, which flatters nothing. Re-shoot on a temperate world before drawing
+conclusions about the substrate bands or `uScatterGain`.
+
+Note that every ground shot before this branch was lit by accident — see the
+`frameSunAt` entry in §5 — so any earlier judgement about surface lighting was
+made against an arbitrary time of day.
 
 ### 4.3 Player pose
 
@@ -116,9 +135,8 @@ The character rendered sprawled/horizontal rather than standing. Not diagnosed.
 
 ### 4.4 Never rendered even once
 
-Wildlife, weather, cities/civilization, audio, mobile touch controls, the
-rover in motion, the starship. `surface-city` and `surface-ocean` have never
-produced an image.
+Wildlife, weather, audio, mobile touch controls, and the rover in motion.
+`surface-ocean` has never produced an image.
 
 ### 4.5 Smaller known issues
 
@@ -142,9 +160,22 @@ silently. Causes hit so far:
 - Referencing a uniform that is in the JS uniform object but never declared in
   GLSL (`uSunColor`, `uSunIntensity`).
 - Declaring `float patch` — reserved word in GLSL ES 3.0.
+- Declaring `vec2 half` — also reserved, and it cost the entire civilisation
+  subsystem. The city generated perfectly, the geometry installed, the buffers
+  were correct, and nothing appeared, for hours.
 - Injecting the noise library *after* code that calls into it.
 
-`tools/shoot.mjs` prints shader errors the instant they appear. Keep that.
+`tools/shoot.mjs` prints shader errors the instant they appear **and now exits
+non-zero on one**. Keep both. Every shot "succeeded" while the city was
+invisible; a harness that reports success in that state is worse than no
+harness. `citywatch.mjs` does the same.
+
+**Shared scratch vectors do not survive a call.** `frameSunAt` took its up
+vector from the module's `_tmp` and then called `updateSun()` in a loop;
+`updateSun` writes `_tmp` when it snaps the shadow camera to the texel grid. So
+every ground shot has been lit by an arbitrary time of day — the city measured
+46° when it asked for 11°. If a function calls anything, it holds its own
+vectors.
 
 **`Object3D.lookAt` is not camera-style.** For anything that is not a camera or
 a light it builds the opposite orientation. `FlyCamera.lookAt` uses
@@ -186,6 +217,18 @@ fetch per step instead of fifteen noise evaluations. `src/planet/Clouds.ts`.
 **Cell grids must be sized in metres.** `2R/1024` is 24 km per cell on an
 Earth-sized world. Derive the grid from a target edge length instead.
 
+**A screen-space error target has no upper bound.** Terrain patch count grows
+as (screenH / pixelError)²; on a 12,000 km world it settled at 2,543 against a
+cap of 500, and eviction could not help because every one of them was being
+selected that frame and none was stale. `QuadSphere` now contracts split
+distances 2% a frame over budget and relaxes 1% a frame under it. A cap that
+only reclaims idle resources is not a cap.
+
+**Unbounded synchronous loops read as hangs.** `prime(320)` was over a million
+terrain evaluations in one statement; from inside a `page.evaluate` that is
+indistinguishable from a crash. Anything that scales with world size gets both
+a count bound and a wall-clock bound.
+
 **Return values mean things.** `StarField.grow()` returned the increment rather
 than the running total, so the galaxy never reported finishing streaming and
 the harness waited 240 s per shot.
@@ -213,30 +256,35 @@ src/
   galaxy/     GalaxyModel, GalaxyRenderer, StarField, GalaxyVolume, Skybox
   planet/     Planet, QuadSphere, TerrainField, TerrainMaterial, Clouds, Aerial
   surface/    ScatterSystem, Wildlife, Weather, Env, Geo
-  civ/        Civilization, CivMath, Materials, Glyphs
-  entities/   Player, CameraRig, CharacterMesh, Rover, Motion, Materials
+  civ/        Civilization (orchestration + streaming), Placement (where
+              settlements go), Layout (the plan), Build (the triangles),
+              CivMath, Materials, Glyphs, CivTypes
+  entities/   Player, CameraRig, CharacterMesh, Rover, Starship, ShipMesh,
+              Motion, Materials
   ui/         Hud, Markers, TouchControls, Theme, Learn, Dom, Glyphs
   audio/      AudioEngine, Music, Instruments, Dsp, Graph, Theory, Voices
 tools/
   shoot.mjs   screenshot harness (the visual review loop)
   perf.mjs    frame-cost probe, one layer at a time
   diag.mjs    boot diagnostic with a short leash
+  civcheck.mjs  headless city generation over all eight styles, 4 s, no browser
+  probe.mjs     per-realm frame timing — slow harness vs hung one
+  citywatch.mjs watch one city stream in, phase by phase
 ```
 
-~30k lines. Roughly a third has never been rendered.
+~35k lines.
 
 ---
 
 ## 7. Suggested order of work
 
-1. **Unblock the surface shots** (§4.1). Nothing else about the surface can be
-   judged until a capture completes.
-2. **Look at `surface-vista` and `surface-first`.** The substrate, sky and
-   scatter work is all committed and all unverified; one capture tells you
-   which of the three landed.
+1. **Shoot a city on real hardware** (§4.1). Everything says it is there; the
+   only thing missing is a machine that can stream the ground under it.
+   `node tools/citywatch.mjs --tier high` is the whole test.
+2. **Re-judge the surface on a temperate world**, now that the sun framing is
+   no longer scanning against a corrupted vector (§4.2).
 3. **Player pose** (§4.3) — `planetDebug().player.grounded` is the first check.
-4. **`surface-city` and `surface-ocean`** — the first look at civilization and
-   at the near-field ocean with Gerstner waves.
+4. **`surface-ocean`** — the near-field ocean with Gerstner waves is still dark.
 5. **Wildlife, weather, audio, touch controls** — all still dark.
 6. Only then go back for polish: galaxy hint text, the framebuffer feedback
    warning, shadow verification, a higher-resolution pass on the hero shots.
