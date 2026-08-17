@@ -16,8 +16,11 @@
     "noUnusedParameters": false,
     "noFallthroughCasesInSwitch": true,
     "forceConsistentCasingInFileNames": true,
-    "baseUrl": ".",
-    "paths": { "@/*": ["src/*"] }
+    // Relative, and with no `baseUrl`: TypeScript 6 removes the option outright
+    // and rejects non-relative path targets. Paths are resolved against this
+    // file's directory, which is what `baseUrl: "."` meant anyway — so this is
+    // the same mapping, spelled in a way that survives the next major.
+    "paths": { "@/*": ["./src/*"] }
   },
   "include": ["src"]
 }
