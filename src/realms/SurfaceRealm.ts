@@ -905,7 +905,11 @@ export class SurfaceRealm implements Realm {
    */
   private frameSunAt(dir: Vector3, wantElev: number): void {
     if (!this.spec) return;
-    const up = _tmp.copy(dir).normalize();
+    // A local, not a shared scratch vector: `updateSun` writes `_tmp` when it
+    // snaps the shadow camera to the texel grid, so holding `_tmp` across the
+    // call replaced this up vector with a planet-scale position on the first
+    // iteration and every ground shot has been scanning against garbage.
+    const up = dir.clone().normalize();
     const day = this.spec.rotationS;
     const t0 = this.simTime;
     let best = t0;
@@ -932,7 +936,8 @@ export class SurfaceRealm implements Realm {
    */
   private frameSun(want: number): void {
     if (!this.spec) return;
-    const camDir = _tmp.copy(this.fly.position).normalize();
+    // Local for the same reason as `frameSunAt`: nothing survives `updateSun`.
+    const camDir = this.fly.position.clone().normalize();
     const day = this.spec.rotationS;
     const t0 = this.simTime;
     let best = t0;
