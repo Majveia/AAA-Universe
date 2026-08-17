@@ -597,7 +597,9 @@ export class SurfaceRealm implements Realm {
     // Fill the scatter around the landing site before the shot rather than
     // streaming it in over the next minute.
     this.scatter?.setViewer(_tmp.copy(dir).multiplyScalar(R + this.planet.heightAt(dir)));
-    (this.scatter as any)?.prime?.(320);
+    // The draw radius holds about thirty cells; priming ten times that built
+    // a few thousand instanced meshes and made the frame uncapturable.
+    (this.scatter as any)?.prime?.(48);
 
     if (this.player) {
       this.player.spawnAt(dir, 0.6);
