@@ -1,0 +1,38 @@
+name: Performance regression
+description: A frame costs more than it should.
+labels: ['performance']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        60 fps on desktop, 30+ on mobile, and nothing hitches. Before filing,
+        `node tools/perf.mjs --view <realm>` costs ninety seconds and usually
+        names the layer outright.
+
+  - type: input
+    id: where
+    attributes:
+      label: Realm and view
+    validations:
+      required: true
+
+  - type: textarea
+    id: perf
+    attributes:
+      label: perf.mjs output
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: stats
+    attributes:
+      label: stats()
+      description: '`window.__aeon.stats()` — fps, frame ms, draw calls, triangles.'
+      render: json
+
+  - type: input
+    id: budget
+    attributes:
+      label: What it should cost
+      description: Draw calls and frame time you expected, and why.
