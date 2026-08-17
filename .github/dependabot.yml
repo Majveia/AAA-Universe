@@ -1,0 +1,20 @@
+version: 2
+updates:
+  # three.js moves fast and its shader chunk names change between releases,
+  # which is exactly the kind of break that renders black rather than throwing.
+  # Monthly, grouped, so it is one reviewable PR rather than a drip.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
+    groups:
+      three:
+        patterns: ['three', '@types/three', 'postprocessing']
+      tooling:
+        patterns: ['vite', 'typescript', 'playwright', 'vite-plugin-glsl', 'esbuild']
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

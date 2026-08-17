@@ -1,5 +1,9 @@
-name: Deploy static content to Pages
+name: Deploy to Pages
 
+# The default branch. Every merge to it republishes the playable build at
+# https://majveia.github.io/AAA-Universe/ — which is the point: this project is
+# judged by what it puts on screen, so the current screen should be one click
+# away from anyone reading the repository.
 on:
   push:
     branches: ['claude/aaa-3d-universe-threejs-x9kbrt']
@@ -10,27 +14,45 @@ permissions:
   pages: write
   id-token: write
 
+# Never cancel a deploy midway: a half-published site is worse than an old one.
 concurrency:
-  group: 'pages'
-  cancel-in-progress: true
+  group: pages
+  cancel-in-progress: false
 
 jobs:
-  deploy:
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+  build:
+    name: verify and build
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: lts/*
-          cache: 'npm'
+          cache: npm
+
       - run: npm ci
-      - run: npm run build
+
+      # The same gate CI runs. A broken build must never reach the live page,
+      # and neither must a shader that silently refuses to compile — the page
+      # would load, render, and simply be missing a subsystem.
+      - name: Verify
+        run: npm run check
+
       - uses: actions/configure-pages@v5
+
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: './dist'
+          path: ./dist
+
+  deploy:
+    name: publish
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - id: deployment
         uses: actions/deploy-pages@v4

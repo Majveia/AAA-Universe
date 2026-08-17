@@ -8,7 +8,14 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview --port 4173",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "glslcheck": "node tools/glslcheck.mjs",
+    "shadercheck": "node tools/shadercheck.mjs",
+    "civcheck": "node tools/civcheck.mjs",
+    "check": "npm run typecheck && npm run glslcheck && npm run build && npm run civcheck",
+    "test": "npm run check && npm run shadercheck",
+    "shoot": "node tools/shoot.mjs",
+    "perf": "node tools/perf.mjs"
   },
   "dependencies": {
     "postprocessing": "^6.37.8",
@@ -16,9 +23,11 @@
   },
   "devDependencies": {
     "@types/three": "^0.185.0",
+    "esbuild": "^0.28.2",
     "playwright": "^1.62.1",
     "typescript": "^5.9.3",
     "vite": "^7.1.7",
     "vite-plugin-glsl": "^1.5.1"
-  }
+  },
+  "license": "MIT"
 }
