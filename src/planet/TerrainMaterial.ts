@@ -131,9 +131,13 @@ function fragBody(): string {
   float near = 1.0 - smoothstep(120.0, 2600.0, vCamDist);
   float veryNear = 1.0 - smoothstep(6.0, 90.0, vCamDist);
 
+  // Detail bands. The anchor's frequency is chosen so 1/f is metres × 32:
+  // grain is 12 cm, coarse 1.2 m, macro 9 m, patch 40 m, region 150 m.
   float grain = fbm(dp * 260.0, 4) * 0.5 + 0.5;
   float coarse = fbm(dp * 26.0, 5) * 0.5 + 0.5;
   float macro = fbm(dp * 3.4, 4) * 0.5 + 0.5;
+  float patch = fbm(dp * 0.80, 4) * 0.5 + 0.5;
+  float region = fbm(dp * 0.21, 3) * 0.5 + 0.5;
 
   float sea = uSeaLevelR - AE_R;
   float above = vElev - sea;
@@ -143,9 +147,28 @@ function fragBody(): string {
   albedo = mix(albedo, uMountain, smoothstep(0.32, 0.68, hN));
   albedo = mix(albedo, uPeak, smoothstep(0.74, 0.96, hN));
 
-  // Vegetation where it is warm and wet and not too steep.
-  float vegMask = smoothstep(0.30, 0.62, hum * temp) * (1.0 - smoothstep(0.30, 0.62, slope));
-  vec3 veg = mix(uVeg, uVegAlt, macro);
+  // SUBSTRATE. Elevation, temperature, humidity and slope are all smooth over
+  // kilometres, so on a plain they hand back a single flat colour for the whole
+  // horizon — which is exactly what a real plain does not look like. Real
+  // ground is a patchwork at tens of metres: bare soil here, gravel there,
+  // a different parent rock over the next rise. These two bands do that, and
+  // they are the difference between terrain and a painted sphere.
+  vec3 gravel = mix(uRock, uSand, patch * 0.55 + 0.2);
+  albedo = mix(albedo, gravel, smoothstep(0.58, 0.86, patch) * 0.55);
+  albedo = mix(albedo, uHighland, smoothstep(0.62, 0.24, region) * 0.30);
+  // Large-scale tonal drift, so no two hillsides are the same value.
+  albedo *= mix(0.80, 1.22, region);
+
+  // Vegetation where it is warm and wet and not too steep — and clumped, not
+  // spread evenly. A uniform green wash reads as a shader; patches read as
+  // ground that something chose to grow on.
+  float clump = smoothstep(0.34, 0.72, patch * 0.6 + macro * 0.4);
+  float vegMask = smoothstep(0.30, 0.62, hum * temp)
+                * (1.0 - smoothstep(0.30, 0.62, slope))
+                * mix(0.25, 1.0, clump);
+  vec3 veg = mix(uVeg, uVegAlt, macro * 0.6 + patch * 0.4);
+  // Dry stems and litter at the edges of a stand, where it thins out.
+  veg = mix(mix(uSand, uVeg, 0.45), veg, smoothstep(0.15, 0.55, clump));
   albedo = mix(albedo, veg, vegMask * 0.92);
 
   // Beaches: a narrow band just above the waterline, widened on gentle slopes.
@@ -174,11 +197,17 @@ function fragBody(): string {
   albedo = mix(albedo, uPolar, clamp(snow, 0.0, 1.0));
 
   /* ---- surface finish ---- */
-  albedo *= mix(1.0, mix(0.84, 1.16, grain), near * 0.85);
-  albedo *= mix(1.0, mix(0.90, 1.10, coarse), 0.7);
+  albedo *= mix(1.0, mix(0.72, 1.28, grain), near * 0.9);
+  albedo *= mix(1.0, mix(0.82, 1.18, coarse), 0.85);
+  // Pebbles and clods: a sparse, high-contrast speckle that only appears when
+  // you are close enough for the ground to have individual objects on it.
+  float peb = smoothstep(0.72, 0.92, fbm(dp * 90.0, 3) * 0.5 + 0.5);
+  albedo = mix(albedo, uRock * 0.85, peb * veryNear * 0.45);
 
   float rough = mix(0.94, 0.70, snow);
   rough = mix(rough, 0.86, rockMask);
+  // Polished rock and dusty soil do not scatter alike.
+  rough = mix(rough, 0.72, smoothstep(0.6, 0.9, patch) * 0.6);
   rough = mix(rough, 0.55, wet);
   albedo *= mix(1.0, 0.62, wet);
 

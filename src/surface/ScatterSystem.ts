@@ -35,7 +35,17 @@ import { cellKey, dirToFaceUV, faceUVToDir, type FaceUV } from './Geo';
 import { EnvUniforms, GLSL_ENV_UNIFORMS, GLSL_SURFACE_LIB, env } from './Env';
 
 /** Cell grid resolution per cube face. Cell size ≈ 2·R/GRID metres. */
-const GRID = 1024;
+/**
+ * Target edge length of a scatter cell, metres. The grid is derived from this
+ * and the planet's radius rather than being a fixed subdivision count: at a
+ * fixed 1024 cells per cube face, a cell on an Earth-sized world is twenty-four
+ * kilometres across, so a cell's worth of grass — capped at a few hundred
+ * blades — spread out to roughly one blade per hectare and nothing was ever
+ * visible from the ground.
+ */
+const CELL_TARGET_M = 96;
+/** Cap on the index range cellKey can pack. */
+const GRID_MAX = 2000000;
 
 interface Cell {
   key: number;
@@ -58,7 +68,8 @@ export class ScatterSystem implements IScatterSystem {
   private quality: QualityProfile | null = null;
   private envU = new EnvUniforms();
   private material: MeshStandardMaterial | null = null;
-  private cellSizeM = 32;
+  private cellSizeM = CELL_TARGET_M;
+  private grid = 1024;
   private pending: { face: number; i: number; j: number; key: number; d2: number }[] = [];
   private time = 0;
 
@@ -66,7 +77,8 @@ export class ScatterSystem implements IScatterSystem {
     this.clear();
     this.planet = planet;
     this.species = buildFlora(planet.spec);
-    this.cellSizeM = (2 * planet.radius) / GRID;
+    this.grid = Math.min(GRID_MAX, Math.max(256, Math.round((2 * planet.radius) / CELL_TARGET_M)));
+    this.cellSizeM = (2 * planet.radius) / this.grid;
     this.material = this.makeMaterial();
   }
 
@@ -201,32 +213,12 @@ varying vec3 vWorldPos;
     const ring = Math.max(1, Math.ceil(radiusM / this.cellSizeM));
 
     /* ---- decide which cells should exist ---- */
-    const dir = _d.copy(this.viewer).normalize();
-    dirToFaceUV(dir, _fuv);
-    const ci = Math.floor(((_fuv.u + 1) * 0.5) * GRID);
-    const cj = Math.floor(((_fuv.v + 1) * 0.5) * GRID);
+    this.collectPending();
 
-    this.pending.length = 0;
-    for (let dj = -ring; dj <= ring; dj++) {
-      for (let di = -ring; di <= ring; di++) {
-        const i = ci + di;
-        const j = cj + dj;
-        if (i < 0 || j < 0 || i >= GRID || j >= GRID) continue;
-        const key = cellKey(_fuv.face, i, j);
-        if (this.cells.has(key)) {
-          this.cells.get(key)!.age = 0;
-          continue;
-        }
-        const d2 = di * di + dj * dj;
-        if (d2 > ring * ring) continue;
-        this.pending.push({ face: _fuv.face, i, j, key, d2 });
-      }
-    }
-    // Nearest first: what is in front of you appears before what is behind.
-    this.pending.sort((a, b) => a.d2 - b.d2);
-
-    // Strict per-frame budget. Streaming must never be the reason for a hitch.
-    const budget = q?.tier === 'ultra' ? 4 : q?.tier === 'potato' ? 1 : 2;
+    // Strict per-frame budget. Streaming must never be the reason for a hitch,
+    // but two cells a frame took most of a minute to fill the draw radius on a
+    // machine already running at ten frames a second.
+    const budget = q?.tier === 'ultra' ? 8 : q?.tier === 'high' ? 6 : q?.tier === 'potato' ? 2 : 4;
     for (let n = 0; n < budget && n < this.pending.length; n++) {
       const c = this.pending[n];
       this.buildCell(c.face, c.i, c.j, c.key, density);
@@ -246,11 +238,80 @@ varying vec3 vWorldPos;
     }
   }
 
+  /** Which cells around the viewer are missing, nearest first. */
+  private collectPending(): void {
+    const q = this.quality;
+    const radiusM = 260 * (q?.scatterDistance ?? 1);
+    const ring = Math.max(1, Math.ceil(radiusM / this.cellSizeM));
+    const dir = _d.copy(this.viewer).normalize();
+    dirToFaceUV(dir, _fuv);
+    const ci = Math.floor(((_fuv.u + 1) * 0.5) * this.grid);
+    const cj = Math.floor(((_fuv.v + 1) * 0.5) * this.grid);
+
+    this.pending.length = 0;
+    for (let dj = -ring; dj <= ring; dj++) {
+      for (let di = -ring; di <= ring; di++) {
+        const i = ci + di;
+        const j = cj + dj;
+        if (i < 0 || j < 0 || i >= this.grid || j >= this.grid) continue;
+        const key = cellKey(_fuv.face, i, j);
+        if (this.cells.has(key)) {
+          this.cells.get(key)!.age = 0;
+          continue;
+        }
+        const d2 = di * di + dj * dj;
+        if (d2 > ring * ring) continue;
+        this.pending.push({ face: _fuv.face, i, j, key, d2 });
+      }
+    }
+    // Nearest first: what is in front of you appears before what is behind.
+    this.pending.sort((a, b) => a.d2 - b.d2);
+  }
+
+  /** Diagnostic: how much has actually been placed around the viewer. */
+  stats(): Record<string, number> {
+    let meshes = 0;
+    let instances = 0;
+    for (const c of this.cells.values()) {
+      meshes += c.meshes.length;
+      for (const m of c.meshes) instances += (m as any).count ?? 0;
+    }
+    return {
+      cells: this.cells.size,
+      meshes,
+      instances,
+      cellSizeM: Math.round(this.cellSizeM),
+      pending: this.pending.length,
+    };
+  }
+
+  /**
+   * Build every cell the viewer can see, right now, ignoring the per-frame
+   * budget. Only for the screenshot harness and for a scripted landing, where
+   * a second of hitch is preferable to a shot of empty ground.
+   */
+  prime(maxCells = 400): number {
+    if (!this.planet || !this.material) return 0;
+    const density = this.quality?.scatterDensity ?? 1;
+    if (density <= 0.001) return 0;
+    let built = 0;
+    for (let pass = 0; pass < 24 && built < maxCells; pass++) {
+      this.collectPending();
+      if (!this.pending.length) break;
+      for (const c of this.pending) {
+        if (built >= maxCells) break;
+        this.buildCell(c.face, c.i, c.j, c.key, density);
+        built++;
+      }
+    }
+    return built;
+  }
+
   private buildCell(face: number, i: number, j: number, key: number, density: number): void {
     const planet = this.planet!;
     const R = planet.radius;
-    const u = (i + 0.5) / GRID * 2 - 1;
-    const v = (j + 0.5) / GRID * 2 - 1;
+    const u = ((i + 0.5) / this.grid) * 2 - 1;
+    const v = ((j + 0.5) / this.grid) * 2 - 1;
     faceUVToDir(face, u, v, _cd);
     const centerH = planet.heightAt(_cd);
     const center = _cd.clone().multiplyScalar(R + centerH);
@@ -286,7 +347,7 @@ varying vec3 vWorldPos;
       const wetBias = 1 + (sample.humidity - 0.5) * sp.wet * 1.4;
       let count = Math.floor(perM2 * area * density * Math.max(0, wetBias));
       if (count <= 0) continue;
-      count = Math.min(count, 900);
+      count = Math.min(count, 4000);
 
       const geo = sp.lods[0];
       const offsets = new Float32Array(count * 3);
@@ -359,8 +420,8 @@ varying vec3 vWorldPos;
     if (!this.planet) return null;
     const dir = _d.copy(localPosition).normalize();
     dirToFaceUV(dir, _fuv);
-    const i = Math.floor(((_fuv.u + 1) * 0.5) * GRID);
-    const j = Math.floor(((_fuv.v + 1) * 0.5) * GRID);
+    const i = Math.floor(((_fuv.u + 1) * 0.5) * this.grid);
+    const j = Math.floor(((_fuv.v + 1) * 0.5) * this.grid);
     const cell = this.cells.get(cellKey(_fuv.face, i, j));
     if (!cell) return null;
 

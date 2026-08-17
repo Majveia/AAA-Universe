@@ -522,6 +522,18 @@ export class SurfaceRealm implements Realm {
       spec: this.spec?.name,
       klass: this.spec?.klass,
       terrain: (this.planet as any)?.stats?.(),
+      scatter: (this.scatter as any)?.stats?.() ?? null,
+      wildlife: (this.wildlife as any)?.stats?.() ?? null,
+      civ: (this.civ as any)?.stats?.() ?? null,
+      weather: this.weather?.state ? summariseWeather(this.weather.state()) : null,
+      player: this.player
+        ? {
+            alt: Math.round(this.player.state.position.length() - (this.spec?.radiusM ?? 0)),
+            grounded: this.player.state.grounded,
+            view: this.player.state.view,
+            speed: Number(this.player.state.velocity.length().toFixed(2)),
+          }
+        : null,
       camDist: this.camera.position.length(),
       radius: this.spec?.radiusM,
     };
@@ -582,6 +594,11 @@ export class SurfaceRealm implements Realm {
     // to stream in, then stand the player on it.
     const dir = await this.pickGroundSpot(mode);
     await this.planet.ensureDetail(dir, 2500);
+    // Fill the scatter around the landing site before the shot rather than
+    // streaming it in over the next minute.
+    this.scatter?.setViewer(_tmp.copy(dir).multiplyScalar(R + this.planet.heightAt(dir)));
+    (this.scatter as any)?.prime?.(320);
+
     if (this.player) {
       this.player.spawnAt(dir, 0.6);
       this.player.setView(mode === 'ground' ? 'first' : 'third');
@@ -810,6 +827,15 @@ function sunIntensity(p: PlanetSpec, s: StarSystemSpec | null): number {
  * How good a world is to arrive at, for the purpose of picking a default.
  * Ordered by what a person would rather be standing on, not by rarity.
  */
+function summariseWeather(w: any): Record<string, number | string> {
+  return {
+    cloud: Number((w.cloudiness ?? 0).toFixed(2)),
+    precip: w.precipitationType ?? 'none',
+    storm: Number((w.storm ?? 0).toFixed(2)),
+    aurora: Number((w.aurora ?? 0).toFixed(2)),
+  };
+}
+
 function worldScore(p: PlanetSpec): number {
   const byClass: Record<string, number> = {
     terran: 100, ocean: 82, jungle: 78, tundra: 60,

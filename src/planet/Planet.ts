@@ -443,7 +443,12 @@ export class Planet implements IPlanet {
         uHRayleigh: new Uniform(a.scaleHeightM),
         uHMie: new Uniform(a.scaleHeightM * 0.22),
         uSteps: new Uniform(16),
-        uScatterGain: new Uniform(0.38),
+        // One is the physically neutral value: the integral above is the real
+        // single-scattering integral in per-metre units. It was set to 0.38 to
+        // tame a limb seen from orbit, which left the sky black overhead when
+        // standing on the ground — the zenith of a real sky is brighter than
+        // the ground beneath it, not darker.
+        uScatterGain: new Uniform(1.0),
       },
       transparent: true,
       depthWrite: false,
