@@ -359,27 +359,30 @@ void main(){
     vec2 cell = vec2(fract(fx), fract(fy));
 
     // Window proportions per architectural language.
-    vec2 half = vec2(0.30, 0.30);
+    // win2 is deliberately not named half: half is a reserved word in GLSL ES
+    // 3.0, and using it fails the whole shader to compile — silently, leaving a
+    // city that generates perfectly and draws nothing at all.
+    vec2 win2 = vec2(0.30, 0.30);
     float soft = 0.045;
     float shape = 0.0;                       // 0 rect, 1 arch, 2 round
-    if (styleId < 0.5){ half = vec2(0.40, 0.16); }                       // brutalist slit
-    else if (styleId < 1.5){ half = vec2(0.17, 0.20); shape = 1.0; }     // organic
-    else if (styleId < 2.5){ half = vec2(0.46, 0.44); }                  // crystalline
-    else if (styleId < 3.5){ half = vec2(0.42, 0.22); }                  // arcology
-    else if (styleId < 4.5){ half = vec2(0.14, 0.12); }                  // nomadic
-    else if (styleId < 5.5){ half = vec2(0.22, 0.22); shape = 2.0; }     // hive
-    else if (styleId < 6.5){ half = vec2(0.16, 0.30); shape = 1.0; }     // baroque
-    else { half = vec2(0.26, 0.26); }                                    // ruins
+    if (styleId < 0.5){ win2 = vec2(0.40, 0.16); }                       // brutalist slit
+    else if (styleId < 1.5){ win2 = vec2(0.17, 0.20); shape = 1.0; }     // organic
+    else if (styleId < 2.5){ win2 = vec2(0.46, 0.44); }                  // crystalline
+    else if (styleId < 3.5){ win2 = vec2(0.42, 0.22); }                  // arcology
+    else if (styleId < 4.5){ win2 = vec2(0.14, 0.12); }                  // nomadic
+    else if (styleId < 5.5){ win2 = vec2(0.22, 0.22); shape = 2.0; }     // hive
+    else if (styleId < 6.5){ win2 = vec2(0.16, 0.30); shape = 1.0; }     // baroque
+    else { win2 = vec2(0.26, 0.26); }                                    // ruins
 
     vec2 q = cell - 0.5;
-    float win = boxMask(q, half, soft);
+    float win = boxMask(q, win2, soft);
     if (shape > 0.5 && shape < 1.5){
       // Arched head: box below the spring line, circle above it.
-      float body = boxMask(vec2(q.x, min(q.y, 0.0)), half, soft);
-      float arch = 1.0 - smoothstep(half.x - soft, half.x + soft, length(vec2(q.x, max(q.y, 0.0) * (half.x / half.y))));
+      float body = boxMask(vec2(q.x, min(q.y, 0.0)), win2, soft);
+      float arch = 1.0 - smoothstep(win2.x - soft, win2.x + soft, length(vec2(q.x, max(q.y, 0.0) * (win2.x / win2.y))));
       win = max(body, arch * step(0.0, q.y));
     } else if (shape > 1.5){
-      win = 1.0 - smoothstep(half.x - soft, half.x + soft, length(q * vec2(1.0, half.x / half.y)));
+      win = 1.0 - smoothstep(win2.x - soft, win2.x + soft, length(q * vec2(1.0, win2.x / win2.y)));
     }
 
     // Mullions inside big glass panels.

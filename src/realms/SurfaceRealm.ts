@@ -63,6 +63,8 @@ type Mode = 'ship' | 'ground' | 'orbit';
 
 export interface PlanetViewOptions {
   mode?: 'orbit' | 'limb' | 'vista' | 'ground' | 'city' | 'night' | 'ocean';
+  /** How long to wait for terrain to stream in before posing anyway, ms. */
+  detailTimeoutMs?: number;
 }
 
 /** How close you have to be to a vehicle before you can get into it. */
@@ -107,6 +109,8 @@ export class SurfaceRealm implements Realm {
   private quality: QualityProfile | null = null;
   /** Non-zero when an offline consumer has asked terrain to stream flat out. */
   private streamBudget = 0;
+  /** Settlement the next ground shot should face, if any. */
+  private lookAtSite: Vector3 | null = null;
 
   constructor() {
     this.scene.background = new Color(0x000000);
@@ -842,7 +846,16 @@ export class SurfaceRealm implements Realm {
     // Ground shots: pick a direction that suits the subject, force the terrain
     // to stream in, then stand the player on it.
     const dir = await this.pickGroundSpot(mode);
-    await this.planet.ensureDetail(dir, 2500);
+    // Race the stream against a deadline. A patch on a world this size costs
+    // real work to generate, and the pin asks for a full LOD chain down to
+    // metre scale — on a slow machine that is minutes, and an `await` that
+    // never returns is indistinguishable from a crash to whatever is driving
+    // us. Take the terrain that arrived and pose the shot anyway: a coarse
+    // landscape is a usable picture, a black screen is not.
+    await Promise.race([
+      this.planet.ensureDetail(dir, 2500),
+      new Promise<void>((r) => setTimeout(r, o.detailTimeoutMs ?? 45000)),
+    ]);
     // Fill the scatter around the landing site before the shot rather than
     // streaming it in over the next minute.
     this.scatter?.setViewer(_tmp.copy(dir).multiplyScalar(R + this.planet.heightAt(dir)));
@@ -852,16 +865,20 @@ export class SurfaceRealm implements Realm {
     (this.scatter as any)?.prime?.(72, 6000);
 
     if (this.player) {
-      this.player.spawnAt(dir, 0.6);
+      // Face the subject. A fixed heading pointed the camera into the scenery
+      // as often as at the thing the shot is named after.
+      const heading = this.lookAtSite ? headingFromTo(dir, this.lookAtSite) : 0.6;
+      this.player.spawnAt(dir, heading);
       this.player.setView(mode === 'ground' ? 'first' : 'third');
       this.mode = 'ground';
       this.player.board(null);
       ctxHud(this)?.setContext('foot');
       // Park the ship and the rover where the player set down, so a surface
       // shot has something human-made in it to give the landscape a scale.
+      // Park them off to the side of the shot, not down the middle of it.
       const tangent = new Vector3(0, 1, 0).cross(dir).normalize();
-      this.ship?.placeAt(_tmp2.copy(dir).addScaledVector(tangent, 26 / R).normalize(), 1.9);
-      this.rover?.placeAt(_tmp2.copy(dir).addScaledVector(tangent, 9 / R).normalize(), 0.7);
+      this.ship?.placeAt(_tmp2.copy(dir).addScaledVector(tangent, 26 / R).normalize(), heading + 1.9);
+      this.rover?.placeAt(_tmp2.copy(dir).addScaledVector(tangent, 9 / R).normalize(), heading + 0.7);
     } else {
       this.mode = 'orbit';
       const h = this.planet.heightAt(dir);
@@ -873,7 +890,9 @@ export class SurfaceRealm implements Realm {
     // terrain its form; a sun overhead flattens the best landscape ever made.
     const elevDeg =
       mode === 'night' ? -14 :
-      mode === 'city' ? 4 :
+      // Low enough to rake the façades and throw long shadows down the
+      // streets, high enough that the place is not a silhouette.
+      mode === 'city' ? 11 :
       mode === 'ocean' ? 9 :
       mode === 'vista' ? 13 : 26;
     this.frameSunAt(dir, (elevDeg * Math.PI) / 180);
@@ -937,12 +956,21 @@ export class SurfaceRealm implements Realm {
       const s = this.civ.settlements();
       if (s.length) {
         const best = s.reduce((a, b) => (b.population > a.population ? b : a));
-        // Stand outside the city looking in, so the skyline reads.
+        // Stand outside the city looking in, so the skyline reads against sky
+        // rather than against more city. Just over one radius out: far enough
+        // for the whole silhouette, close enough that the towers still have
+        // some size on screen.
+        this.lookAtSite = best.direction.clone();
         const d = best.direction.clone();
         const tangent = new Vector3(0, 1, 0).cross(d).normalize();
-        return d.addScaledVector(tangent, (best.radius * 1.9) / R).normalize();
+        // Just inside the edge, looking toward the middle. Standing right out
+        // in the fields puts the whole place on the horizon at four pixels
+        // tall; from the last block in you get near buildings for scale and
+        // the core behind them, which is what a skyline actually is.
+        return d.addScaledVector(tangent, (best.radius * 0.82) / R).normalize();
       }
     }
+    this.lookAtSite = null;
     // Two passes. A coarse golden-angle sweep gets the altitude band and the
     // local relief from cheap height lookups, and only the survivors pay for a
     // full surface sample (five height evaluations each) to check that the
@@ -1065,6 +1093,22 @@ export class SurfaceRealm implements Realm {
   }
 }
 
+/**
+ * Heading at `from` that points along the great circle toward `to`, in the same
+ * convention `Player.spawnAt` uses: zero is the reference tangent, positive is
+ * a rotation about the local up.
+ */
+function headingFromTo(from: Vector3, to: Vector3): number {
+  const up = _hUp.copy(from).normalize();
+  const ref = Math.abs(up.y) > 0.94 ? _hRef.set(1, 0, 0) : _hRef.set(0, 1, 0);
+  const base = _hBase.crossVectors(ref, up).normalize();
+  const right = _hRight.crossVectors(up, base).normalize();
+  const toward = _hTo.copy(to).addScaledVector(up, -to.dot(up));
+  if (toward.lengthSq() < 1e-12) return 0;
+  toward.normalize();
+  return Math.atan2(toward.dot(right), toward.dot(base));
+}
+
 /** The HUD lives on the engine's service bag; debugView has no ctx of its own. */
 function ctxHud(realm: any): { setContext(m: string): void } | null {
   return realm.hudRef ?? null;
@@ -1078,6 +1122,11 @@ const _tmp = new Vector3();
 const _wind = new Vector3();
 const _tmp2 = new Vector3();
 const _sunPos = new Vector3();
+const _hUp = new Vector3();
+const _hRef = new Vector3();
+const _hBase = new Vector3();
+const _hRight = new Vector3();
+const _hTo = new Vector3();
 
 /** Insolation relative to Earth, gently compressed so nothing blows out. */
 function sunIntensity(p: PlanetSpec, s: StarSystemSpec | null): number {

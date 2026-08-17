@@ -305,6 +305,15 @@ export class Civilization implements ICivilization {
           traffic: this.caps.traffic,
           signs: this.caps.signs,
         });
+        // Pin the terrain under the settlement.
+        //
+        // The city is graded to `heightAt`, but what gets *drawn* is whatever
+        // LOD the quadtree has streamed, and a coarse patch on a world this
+        // size under-samples the height field by hundreds of metres. Ask for
+        // detail over the footprint and a city can never be buried by the
+        // ground it was built on. Fire and forget: the pin is satisfied when
+        // the terrain catches up, and nothing here waits on it.
+        void planet.ensureDetail(s.site.dir, Math.max(400, s.site.radius));
         s.stage = 'geometry';
         s.progress = 0.35;
         break;
@@ -618,13 +627,43 @@ export class Civilization implements ICivilization {
 
   /** Diagnostic, for the screenshot harness. */
   stats(): Record<string, unknown> {
+    const working = this.places.find((s) => s.stage !== 'cold' && s.stage !== 'ready');
+    let nearest: Settlement | null = null;
+    let nearestD = Infinity;
+    for (const s of this.places) {
+      const d = s.center.distanceTo(this.viewer);
+      if (d < nearestD) {
+        nearestD = d;
+        nearest = s;
+      }
+    }
+    const ready = this.places.find((s) => s.stage === 'ready');
+    let verts = 0;
+    if (ready?.group) {
+      for (const c of ready.group.children) {
+        const g = (c as any).geometry;
+        const pos = g?.getAttribute?.('position');
+        if (pos) verts += pos.count;
+      }
+    }
     return {
       sites: this.sites.length,
       built: this.places.filter((s) => s.stage === 'ready').length,
-      building: this.places.find((s) => s.stage !== 'cold' && s.stage !== 'ready')?.site.name ?? null,
-      progress: Number((this.places.find((s) => s.stage !== 'cold' && s.stage !== 'ready')?.progress ?? 0).toFixed(2)),
+      building: working?.site.name ?? null,
+      progress: Number((working?.progress ?? 0).toFixed(2)),
       buildings: this.places.reduce((a, s) => a + (s.layout?.buildings.length ?? 0), 0),
       night: Number(this.lighting.night.toFixed(2)),
+      // The two numbers that separate "the camera is nowhere near it" from
+      // "it is right there and the geometry is wrong" — which a screenshot of
+      // an empty plain cannot tell you.
+      nearest: nearest?.site.name ?? null,
+      nearestKind: nearest?.site.kind ?? null,
+      nearestM: Math.round(nearestD),
+      nearestRadius: Math.round(nearest?.site.radius ?? 0),
+      readyName: ready?.site.name ?? null,
+      readyMeshes: ready?.group?.children.length ?? 0,
+      readyVerts: verts,
+      sunUp: Number(this.lighting.sunDir.dot(_v0.copy(this.viewer).normalize()).toFixed(3)),
     };
   }
 

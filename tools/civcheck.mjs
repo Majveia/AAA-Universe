@@ -23,7 +23,7 @@ const entry = path.join(dir, 'entry.ts');
 writeFileSync(
   entry,
   `
-import { Vector3 } from 'three';
+import { Matrix4, Vector3 } from 'three';
 import { placeSettlements } from '${path.resolve('src/civ/Placement.ts').replace(/\\/g, '/')}';
 import { buildLayout } from '${path.resolve('src/civ/Layout.ts').replace(/\\/g, '/')}';
 import { emitCity } from '${path.resolve('src/civ/Build.ts').replace(/\\/g, '/')}';
@@ -123,11 +123,48 @@ export function run() {
     const verts = (g: any) => (g ? g.getAttribute('position').count : 0);
     const tris = (g: any) => (g && g.index ? g.index.count / 3 : 0);
 
+    // Where does this geometry actually end up?
+    //
+    // Every buffer is in the settlement's own tangent frame, and the realm hangs
+    // it off a group whose basis is (east, north, up) with its origin on the
+    // ground. If that composition is wrong the city is generated perfectly and
+    // rendered somewhere nobody will ever stand — which is indistinguishable,
+    // from a screenshot, from a city that was never generated at all. So check
+    // it here, in numbers: transform the extremes back to planet-local and
+    // confirm they sit on the surface, near the site, the right way up.
+    const basis = new Matrix4().makeBasis(frame.east, frame.north, frame.up);
+    basis.setPosition(frame.origin);
+    const probe = (g: any) => {
+      if (!g) return null;
+      const a = g.getAttribute('position');
+      let rMin = Infinity;
+      let rMax = -Infinity;
+      let offMax = 0;
+      const v = new Vector3();
+      const step = Math.max(1, Math.floor(a.count / 400));
+      for (let k = 0; k < a.count; k += step) {
+        v.fromBufferAttribute(a, k).applyMatrix4(basis);
+        const r = v.length();
+        if (r < rMin) rMin = r;
+        if (r > rMax) rMax = r;
+        // Angular distance from the site, as an arc length in metres.
+        const arc = Math.acos(Math.max(-1, Math.min(1, v.clone().normalize().dot(site.dir)))) * R;
+        if (arc > offMax) offMax = arc;
+      }
+      return {
+        altMin: Math.round(rMin - R),
+        altMax: Math.round(rMax - R),
+        spreadM: Math.round(offMax),
+      };
+    };
+    const placed = { city: probe(geo.city), road: probe(geo.road), ground: probe(geo.ground) };
+
     out.push({
       style,
       sites: sites.length,
       kinds: sites.map((s: any) => s.kind).join(','),
       radius: Math.round(site.radius),
+      siteElev: Math.round(site.elevation),
       pattern: layout.pattern,
       streets: layout.streets.length,
       blocks: layout.blocks.length,
@@ -142,6 +179,7 @@ export function run() {
       holoTris: Math.round(tris(geo.holo)),
       traffic: geo.traffic ? geo.traffic.instanceCount : 0,
       obstacles: geo.obstacles.length,
+      placed,
       slices,
       ms: { place: tPlace, heights: tHeights, layout: tLayout, emit: tEmit },
     });
@@ -181,6 +219,16 @@ for (const r of rows) {
       `[place ${r.ms.place} · height ${r.ms.heights} · layout ${r.ms.layout} · emit ${r.ms.emit} ms in ${r.slices} slices]`
   );
   console.log(`             sites: ${r.kinds}`);
+  const P = r.placed;
+  const fmt = (n, x) => (x ? `${n} alt ${x.altMin}..${x.altMax}m spread ${x.spreadM}m` : `${n} —`);
+  console.log(`             placed: ${fmt('city', P.city)} · ${fmt('road', P.road)} · ${fmt('ground', P.ground)}`);
+  // The site itself sits at `site.elevation`; anything more than a few hundred
+  // metres away from that vertically, or further out than the settlement's own
+  // radius horizontally, is misplaced geometry.
+  if (P.city && (Math.abs(P.city.altMin - Math.round(r.siteElev)) > 400 || P.city.spreadM > r.radius * 2.2)) {
+    bad++;
+    console.log(`             !! city geometry is not where the settlement is`);
+  }
 }
 rmSync(dir, { recursive: true, force: true });
 if (bad) {

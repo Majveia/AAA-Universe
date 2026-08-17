@@ -345,7 +345,10 @@ async function main() {
     }
   }
 
-  writeFileSync(path.join(OUT, 'manifest.json'), JSON.stringify({ manifest, logs: logs.slice(0, 200) }, null, 2));
+  writeFileSync(
+    path.join(OUT, 'manifest.json'),
+    JSON.stringify({ manifest, shaderErrors, logs: logs.slice(0, 200) }, null, 2)
+  );
 
   if (logs.length) {
     console.log(`\n› ${logs.length} console errors/warnings (first 20):`);
@@ -355,7 +358,16 @@ async function main() {
   await browser.close();
   server.kill('SIGTERM');
   console.log(`\n› wrote ${manifest.filter((m) => !m.error).length}/${list.length} shots to ${OUT}/`);
-  process.exit(0);
+
+  // A shader that fails to compile does not throw and does not draw: the object
+  // is simply absent and every shot still "succeeds". That is how a reserved
+  // word in the façade shader survived long enough for a whole city to generate
+  // correctly and render as nothing at all. Never exit clean on one again.
+  if (shaderErrors.length) {
+    console.error(`\n!! ${shaderErrors.length} shader compile failure(s) — the shot list is not trustworthy.`);
+    process.exit(2);
+  }
+  process.exit(manifest.some((m) => m.error) ? 1 : 0);
 }
 
 /**

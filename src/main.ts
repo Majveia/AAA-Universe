@@ -159,6 +159,16 @@ async function boot(): Promise<void> {
     plainTerrain: (v: boolean) => surface.setPlainTerrain(v),
     webDebug: (o: any) => cosmos.debugWeb({ ...(o ?? {}), renderer: engine.renderer }),
     setPost: (v: boolean) => (engine.postEnabled = v),
+    /**
+     * Shadows off. A ground shot re-renders every scatter instance into the
+     * shadow map, and on a software rasteriser that one pass is most of the
+     * frame — enough that a city cannot finish streaming in before whatever is
+     * driving the harness gives up on it.
+     */
+    setShadows: (v: boolean) => {
+      engine.renderer.shadowMap.enabled = v;
+      engine.renderer.shadowMap.needsUpdate = true;
+    },
     debugBox: (v: boolean) => cosmos.setDebugBox(v),
   };
 }
