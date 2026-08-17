@@ -388,6 +388,11 @@ export interface IHud extends Disposable {
   setLocation(primary: string, secondary?: string): void;
   /** Transient message, e.g. "Atmospheric entry" or an objective. */
   toast(text: string, durationS?: number): void;
+  /**
+   * Contextual action prompt — what the interact button would do right now.
+   * Safe to call every frame with the same string; null clears it.
+   */
+  setPrompt(text: string | null, key?: string): void;
   /** Big cinematic title card, used on arrival at a new world. */
   titleCard(title: string, subtitle?: string): void;
   /** Vital readouts. */

@@ -34,8 +34,6 @@ export interface CityGeometry {
   holo: BufferGeometry | null;
   traffic: InstancedBufferGeometry | null;
   obstacles: Obstacle[];
-  /** Emissive point sources for the orbital night-lights cloud. */
-  lightPoints: { x: number; y: number; z: number; size: number; tint: [number, number, number] }[];
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -170,7 +168,7 @@ function dome(mb: MeshBuilder, cx: number, cy: number, r: number, z: number, hei
  * One building: plinth, massing stack with setbacks, roof, and whatever the
  * archetype adds on top.
  */
-export function emitBuilding(mb: MeshBuilder, b: BuildingParams, datum: number, obstacles: Obstacle[], lights: CityGeometry['lightPoints'], neon: [number, number, number]): void {
+export function emitBuilding(mb: MeshBuilder, b: BuildingParams, datum: number, obstacles: Obstacle[]): void {
   const rng = new Rng(Math.round(b.seed * 4294967295));
   const bay = 2.4 + rng.range(0, 2.4) + (b.matId === MAT_GLASS ? 1.4 : 0);
   mb.setFacade(b.floorHeight, bay, b.litProb, b.seed);
@@ -280,10 +278,9 @@ export function emitBuilding(mb: MeshBuilder, b: BuildingParams, datum: number, 
     mb.setInfo(STYLE_ID[b.style], b.decay * 0.4, 0.95, MAT_METAL);
     extrude(mb, mast, z, z + mh, base, 0, 0.95);
     capPoly(mb, mast, z + mh, 1, 1);
-    lights.push({ x: rc[0], y: rc[1], z: z + mh + 1, size: 26, tint: [1.6, 0.25, 0.15] });
   }
 
-  /* ── collision + orbital light ────────────────────────────────────────── */
+  /* ── collision ────────────────────────────────────────────────────────── */
   obstacles.push({
     x: b.x,
     y: b.y,
@@ -295,19 +292,6 @@ export function emitBuilding(mb: MeshBuilder, b: BuildingParams, datum: number, 
     z1: top,
   });
 
-  // One light point per building, brightness from how lit its windows are.
-  if (b.litProb > 0.05) {
-    const warm = b.district === 'core' || b.district === 'market';
-    lights.push({
-      x: b.x,
-      y: b.y,
-      z: base + b.height * 0.5,
-      size: Math.max(6, Math.sqrt(b.hu * b.hv) * (2 + b.litProb * 5)),
-      tint: warm
-        ? [1.0, 0.72 + b.litProb * 0.2, 0.42]
-        : [neon[0] * 0.35 + 0.6, neon[1] * 0.3 + 0.6, neon[2] * 0.4 + 0.5],
-    });
-  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -419,15 +403,7 @@ function post(mb: MeshBuilder, x: number, y: number, z0: number, z1: number, hw:
   capPoly(mb, poly, z1, 1, ao);
 }
 
-export function emitProps(
-  mb: MeshBuilder,
-  holo: MeshBuilder,
-  props: Prop[],
-  datum: number,
-  civ: CivilizationSpec,
-  lights: CityGeometry['lightPoints']
-): void {
-  const neon = civ.neon;
+export function emitProps(mb: MeshBuilder, holo: MeshBuilder, props: Prop[], datum: number, civ: CivilizationSpec): void {
   for (const p of props) {
     const z = p.z - datum;
     switch (p.kind) {
@@ -442,7 +418,6 @@ export function emitProps(
         // Two crossed additive quads under the head make it a light source.
         holoQuad(holo, ax, p.y, z + h - 0.3, 1.5 * p.scale, 0.8 * p.scale, p.rot, 3, 0.9, p.seed);
         holoQuad(holo, ax, p.y, z + h - 0.3, 1.5 * p.scale, 0.8 * p.scale, p.rot + Math.PI / 2, 3, 0.9, p.seed);
-        lights.push({ x: p.x, y: p.y, z: z + h, size: 3.5, tint: [1.0, 0.78, 0.5] });
         break;
       }
       case 'sign': {
@@ -450,7 +425,6 @@ export function emitProps(
         mb.setInfo(STYLE_ID[civ.style], civ.decay, 1, MAT_METAL);
         post(mb, p.x, p.y, z, z + h, 0.16, 0.16, p.rot, 0.8);
         holoQuad(holo, p.x, p.y, z + h + 1.6 * p.scale, 5.5 * p.scale, 3.2 * p.scale, p.rot, 0, 1.0, p.seed);
-        lights.push({ x: p.x, y: p.y, z: z + h, size: 7, tint: [neon[0], neon[1], neon[2]] });
         break;
       }
       case 'beacon': {
@@ -458,7 +432,6 @@ export function emitProps(
         post(mb, p.x, p.y, z, z + 1.1, 0.18, 0.18, p.rot, 0.9);
         holoQuad(holo, p.x, p.y, z + 1.4, 1.2, 0.9, p.rot, 3, 1.6, p.seed);
         holoQuad(holo, p.x, p.y, z + 1.4, 1.2, 0.9, p.rot + Math.PI / 2, 3, 1.6, p.seed);
-        lights.push({ x: p.x, y: p.y, z: z + 1.4, size: 4, tint: [1.4, 0.5, 0.2] });
         break;
       }
       case 'antenna':
@@ -467,7 +440,6 @@ export function emitProps(
         mb.setInfo(STYLE_ID[civ.style], civ.decay, 1, MAT_METAL);
         post(mb, p.x, p.y, z, z + h, 0.7 * p.scale, 0.7 * p.scale, p.rot, 0.85);
         post(mb, p.x, p.y, z + h, z + h * 1.4, 0.16 * p.scale, 0.16 * p.scale, p.rot, 0.95);
-        lights.push({ x: p.x, y: p.y, z: z + h * 1.4, size: 14, tint: [1.6, 0.22, 0.12] });
         break;
       }
       case 'tank': {
@@ -703,7 +675,6 @@ export function* emitCity(layout: Layout, hf: Heightfield, civ: CivilizationSpec
   const groundB = new MeshBuilder(frame);
   const holoB = new MeshBuilder(frame);
   const obstacles: Obstacle[] = [];
-  const lightPoints: CityGeometry['lightPoints'] = [];
 
   emitGround(groundB, layout.ground, hf, datum, civ);
   yield 0.1;
@@ -714,11 +685,11 @@ export function* emitCity(layout: Layout, hf: Heightfield, civ: CivilizationSpec
   const chunk = Math.max(24, Math.ceil(n / 14));
   for (let i = 0; i < n; i += chunk) {
     const end = Math.min(n, i + chunk);
-    for (let k = i; k < end; k++) emitBuilding(cityB, layout.buildings[k], datum, obstacles, lightPoints, civ.neon);
+    for (let k = i; k < end; k++) emitBuilding(cityB, layout.buildings[k], datum, obstacles);
     yield 0.2 + 0.6 * (end / n);
   }
 
-  emitProps(cityB, holoB, layout.props, datum, civ, lightPoints);
+  emitProps(cityB, holoB, layout.props, datum, civ);
   yield 0.9;
   emitFacadeSigns(holoB, layout.buildings, datum, new Rng(layout.site.seed ^ 0x515), caps.signs);
 
@@ -732,6 +703,5 @@ export function* emitCity(layout: Layout, hf: Heightfield, civ: CivilizationSpec
     holo: holoB.empty ? null : holoB.toGeometry(),
     traffic,
     obstacles,
-    lightPoints,
   };
 }

@@ -91,11 +91,19 @@ interface Caps {
   range: number;
 }
 
+/**
+ * `hfRes` is the one number that decides whether a city sits *on* its terrain or
+ * hovers over it: the whole settlement is graded to this grid, so its cell size
+ * is the error between a kerb and the ground under it. At these resolutions a
+ * cell is 25–50 m, and since the paving, the roads and the building plinths all
+ * come off the same grid they agree with each other — the only place the
+ * approximation shows is where the city meets open ground.
+ */
 const CAPS_BY_TIER: Record<string, Caps> = {
-  low: { maxBuildings: 320, detail: 0.0, traffic: 0, signs: 0, hfRes: 48, heightPerFrame: 220, range: 9 },
-  medium: { maxBuildings: 900, detail: 0.45, traffic: 14, signs: 10, hfRes: 64, heightPerFrame: 420, range: 12 },
-  high: { maxBuildings: 2100, detail: 1.0, traffic: 40, signs: 26, hfRes: 96, heightPerFrame: 900, range: 16 },
-  ultra: { maxBuildings: 3600, detail: 1.4, traffic: 72, signs: 44, hfRes: 128, heightPerFrame: 1600, range: 20 },
+  low: { maxBuildings: 320, detail: 0.0, traffic: 0, signs: 0, hfRes: 64, heightPerFrame: 400, range: 9 },
+  medium: { maxBuildings: 900, detail: 0.45, traffic: 14, signs: 10, hfRes: 96, heightPerFrame: 700, range: 12 },
+  high: { maxBuildings: 2100, detail: 1.0, traffic: 40, signs: 26, hfRes: 144, heightPerFrame: 1100, range: 16 },
+  ultra: { maxBuildings: 3600, detail: 1.4, traffic: 72, signs: 44, hfRes: 192, heightPerFrame: 1800, range: 20 },
 };
 
 export class Civilization implements ICivilization {
@@ -270,7 +278,7 @@ export class Civilization implements ICivilization {
         s.frame = frame;
         s.hf = new Heightfield(
           frame,
-          s.site.radius * 1.45,
+          s.site.radius * 1.2,
           this.caps.hfRes,
           seaR > 0 ? seaR - planet.radius : -Infinity
         );

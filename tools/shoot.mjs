@@ -34,6 +34,7 @@ const ONLY = arg('shots', '').split(',').filter(Boolean);
 const KEEP = args.includes('--keep');
 const DIAG = args.includes('--diag');
 const SETTLE = parseInt(arg('settle', '2500'), 10);
+const STREAM_MS = parseInt(arg('stream', '120'), 10);
 // Headless here means SwiftShader — a software rasteriser. 'ultra' is the right
 // tier to judge on real hardware but never finishes a frame in software, so the
 // tier is a flag with a tractable default.
@@ -241,6 +242,11 @@ async function main() {
   await sleep(1200);
 
   await page.evaluate((t) => window.__aeon.setTier(t), TIER);
+  // Nobody is playing, so frame rate is worth nothing and a finished world is
+  // worth everything. Under SwiftShader the default few-milliseconds-per-frame
+  // terrain budget buys almost no streaming at all, and `ensureDetail` — which
+  // every ground shot waits on — simply never resolves.
+  await page.evaluate((ms) => window.__aeon.stream?.(ms), STREAM_MS);
   await sleep(500);
 
   const list = ONLY.length ? SHOTS.filter((s) => ONLY.includes(s.id)) : SHOTS;

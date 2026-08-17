@@ -222,6 +222,8 @@ export class QuadSphere {
   private cam = new Vector3();
   private camLen = 0;
   private lodFactor = 4;
+  /** 0.35–1 multiplier on split distance, held by the patch budget. */
+  private lodBudget = 1;
   private rMinSq = 0;
 
   private _d = new Vector3();
@@ -310,8 +312,28 @@ export class QuadSphere {
       Math.max(1.7, screenH / (2 * tanHalf * Math.max(0.5, this.opts.pixelError) * (res - 1))),
     );
 
+    // Hold the patch budget.
+    //
+    // A pure screen-space-error rule has no upper bound on how many patches it
+    // asks for: the count grows as (screenH / pixelError)², and on a world with
+    // a 12,000 km radius standing on the ground it settled at 2,500 patches
+    // against a cap of 500 — five times the draw calls the tier was budgeted
+    // for. Eviction cannot help, because every one of those patches is being
+    // selected every frame and none of them is stale.
+    //
+    // So the error target gives, gently. Over budget, split distances contract
+    // by 2% a frame until the count comes back; under it, they relax by 1% a
+    // frame until the tier's real pixel error is restored. Asymmetric rates and
+    // a 20% dead band keep it from hunting, and the whole thing is invisible:
+    // it costs a fraction of a pixel of terrain error, spread over the horizon,
+    // to keep the frame time flat.
+    const over = this.patchCount / Math.max(1, this.opts.maxPatches);
+    if (over > 1) this.lodBudget = Math.max(0.35, this.lodBudget * 0.98);
+    else if (over < 0.8) this.lodBudget = Math.min(1, this.lodBudget * 1.01);
+    const factor = this.lodFactor * this.lodBudget;
+
     for (let l = 0; l <= this.opts.maxDepth + 1; l++) {
-      this.ranges[l] = this.patchArc(Math.min(l, this.opts.maxDepth)) * this.lodFactor;
+      this.ranges[l] = this.patchArc(Math.min(l, this.opts.maxDepth)) * factor;
     }
     // Morph band: begin two thirds of the way out, complete just inside the
     // parent's split distance so a patch is always fully merged before it goes.
@@ -809,8 +831,14 @@ export class QuadSphere {
     for (const r of this.roots) visit(r);
   }
 
-  stats(): { patches: number; queued: number; lodFactor: number } {
-    return { patches: this.patchCount, queued: this.queue.length, lodFactor: this.lodFactor };
+  stats(): Record<string, number> {
+    return {
+      patches: this.patchCount,
+      queued: this.queue.length,
+      lodFactor: this.lodFactor,
+      lodBudget: Number(this.lodBudget.toFixed(3)),
+      maxPatches: this.opts.maxPatches,
+    };
   }
 
   dispose(): void {

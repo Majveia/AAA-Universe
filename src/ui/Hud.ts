@@ -74,6 +74,10 @@ export class Hud implements IHud {
   private locSecondary: HTMLElement;
   private toastBox: HTMLElement;
   private prompt: HTMLElement;
+  private act: HTMLElement;
+  private actKey: HTMLElement;
+  private actText: HTMLElement;
+  private actShown = '';
   private title: HTMLElement;
   private titleEyebrow: HTMLElement;
   private titleName: HTMLElement;
@@ -142,6 +146,9 @@ export class Hud implements IHud {
     this.toastBox = el('div', 'ae-toasts ae-h', this.stage);
     this.prompt = el('div', 'ae-prompt ae-h', this.stage);
     this.prompt.textContent = 'click to look';
+    this.act = el('div', 'ae-act ae-h', this.stage);
+    this.actKey = el('i', undefined, this.act);
+    this.actText = el('span', undefined, this.act);
 
     /* ── title card ── */
     this.title = el('div', 'ae-title ae-h', this.stage);
@@ -226,6 +233,27 @@ export class Hud implements IHud {
     this.pendingLoc = [p, s];
     this.locBox.classList.add('ae-swap');
     this.locSwap = 0.28;
+  }
+
+  /**
+   * The contextual action prompt: "E — board the ship".
+   *
+   * Deliberately not a toast. A toast is an event and appends a node; this is a
+   * *state*, polled every frame by whoever owns the player, so it has to be
+   * free to call sixty times a second with the same string. It touches the DOM
+   * only when the text actually changes.
+   */
+  setPrompt(text: string | null, key = 'E'): void {
+    const want = text ?? '';
+    if (want === this.actShown) return;
+    this.actShown = want;
+    if (!want) {
+      this.act.classList.remove('ae-on');
+      return;
+    }
+    this.actKey.textContent = this.gamepad ? 'X' : key;
+    this.actText.textContent = want;
+    this.act.classList.add('ae-on');
   }
 
   toast(text: string, durationS = 3.4): void {

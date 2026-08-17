@@ -154,6 +154,8 @@ async function boot(): Promise<void> {
     planetDebug: () => surface.debugPlanet(),
     galaxyDebug: () => galaxy.debugGalaxy(),
     planetLayer: (l: any, v: boolean) => surface.setLayer(l, v),
+    /** Terrain build budget, ms/frame. See SurfaceRealm.setStreamBudget. */
+    stream: (ms: number) => surface.setStreamBudget(ms),
     plainTerrain: (v: boolean) => surface.setPlainTerrain(v),
     webDebug: (o: any) => cosmos.debugWeb({ ...(o ?? {}), renderer: engine.renderer }),
     setPost: (v: boolean) => (engine.postEnabled = v),
